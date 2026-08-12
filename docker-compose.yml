@@ -1,0 +1,28 @@
+# Ma'lumotlar bazasi Supabase'da (bulutda) bo'lgani uchun bu yerda faqat
+# ilovaning o'zi bor. Redis kerak emas — navbat Supabase jadvalida.
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '${PORT:-3000}:3000'
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Yuk oshsa workerni alohida ko'paytirish uchun (ixtiyoriy):
+  #   docker compose up -d --scale worker=3 worker
+  # worker:
+  #   build: .
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   environment:
+  #     NODE_ENV: production
+  #   command: ['node', 'dist/worker-standalone.js']
