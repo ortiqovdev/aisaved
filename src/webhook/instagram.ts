@@ -6,7 +6,9 @@ import * as usersRepo from '../db/users.repo.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
 import {
   extractVideoAttachment,
+  firstAttachmentType,
   flattenEvents,
+  trySendInstagramAction,
   trySendInstagramText,
   verifyWebhookSignature,
   type IgMessagingEvent,
@@ -14,12 +16,13 @@ import {
 } from '../services/instagram.ts';
 import { trySendText } from '../bot/notify.ts';
 import {
+  IG_ALREADY_LINKED,
   IG_CODE_NOT_FOUND,
   IG_LINK_SUCCESS,
   IG_NOT_LINKED_REPLY,
   IG_QUEUED,
-  IG_UNSUPPORTED_ATTACHMENT,
   escapeHtml,
+  igUnsupportedReply,
 } from '../bot/messages.ts';
 
 export const instagramWebhookRouter = Router();
@@ -73,7 +76,7 @@ instagramWebhookRouter.post('/', (req: Request, res: Response) => {
 // Ishlov berish
 // ---------------------------------------------------------------------------
 
-async function handleWebhookBody(body: IgWebhookBody): Promise<void> {
+export async function handleWebhookBody(body: IgWebhookBody): Promise<void> {
   if (body.object !== 'instagram') {
     logger.debug({ object: body.object }, 'Instagram bo\'lmagan webhook — e\'tiborsiz qoldirildi');
     return;
@@ -99,8 +102,12 @@ async function handleEvent(event: IgMessagingEvent): Promise<void> {
   // Bizning akkauntimizdan kelgan bo'lsa — o'tkazib yuboramiz
   if (senderId === event.recipient?.id) return;
 
+  // "Ko'rildi" — foydalanuvchi xabari yetib borganini darhol biladi
+  await trySendInstagramAction(senderId, 'mark_seen');
+
   const media = extractVideoAttachment(event);
   if (media) {
+    await trySendInstagramAction(senderId, 'typing_on');
     await handleMedia(senderId, event, media.url, media.type);
     return;
   }
@@ -112,22 +119,29 @@ async function handleEvent(event: IgMessagingEvent): Promise<void> {
 
   // Rasm, stiker, ovozli xabar va h.k.
   if ((message.attachments?.length ?? 0) > 0 || message.is_unsupported) {
-    await trySendInstagramText(senderId, IG_UNSUPPORTED_ATTACHMENT);
+    await trySendInstagramText(senderId, igUnsupportedReply(firstAttachmentType(event)));
   }
 }
 
 /** Matnli xabar — bog'lash kodi bo'lishi mumkin. */
 async function handleText(igScopedId: string, text: string): Promise<void> {
   const code = usersRepo.normalizeLinkCode(text);
+  const linked = await usersRepo.findByIgScopedId(igScopedId);
 
   if (!code) {
-    const linked = await usersRepo.findByIgScopedId(igScopedId);
     await trySendInstagramText(
       igScopedId,
       linked
         ? '👋 Menga reels yuboring — videoni va musiqa nomini Telegram botingizga tashlayman.'
         : IG_NOT_LINKED_REPLY,
     );
+    return;
+  }
+
+  // Allaqachon bog'langan akkaunt kod yuborsa, "kod topilmadi" degan
+  // chalkash javob bermaymiz.
+  if (linked && linked.link_status === 'linked') {
+    await trySendInstagramText(igScopedId, IG_ALREADY_LINKED);
     return;
   }
 

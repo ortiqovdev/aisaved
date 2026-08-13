@@ -15,7 +15,11 @@ export function linkInstructions(linkCode: string): string {
   return [
     '👋 <b>Salom!</b>',
     '',
-    'Instagram\'dagi reels musiqasini topib beraman. Buning uchun avval akkauntlaringizni bog\'lash kerak — bu bir marta qilinadi.',
+    'Instagram\'dagi reels musiqasini topib beraman.',
+    '',
+    '⚡️ <b>Tez yo\'l:</b> videoni shu yerga tashlang — musiqa nomini darhol aytaman, hech narsa sozlash shart emas.',
+    '',
+    '📸 <b>Instagram reels uchun</b> esa bir marta bog\'lanish kerak:',
     '',
     '<b>1-qadam.</b> Instagram\'da <b>@' + escapeHtml(env.IG_ACCOUNT_USERNAME) + '</b> akkauntiga o\'ting.',
     '<b>2-qadam.</b> Unga DM orqali quyidagi kodni yuboring:',
@@ -43,14 +47,22 @@ export function alreadyLinked(igScopedId: string | null): string {
 }
 
 export const HELP_TEXT = [
+  '<b>Musiqani topishning ikki yo\'li bor</b>',
+  '',
+  '<b>1️⃣ Eng oson — videoni shu yerga tashlang</b>',
+  'Video, GIF, ovozli xabar yoki audio yuboring — musiqa nomini javob qilaman.',
+  'Hech narsa bog\'lash shart emas. (Fayl 20MB gacha bo\'lsin.)',
+  '',
+  `<b>2️⃣ Instagram reels uchun</b>`,
+  `Instagram'da @${escapeHtml(env.IG_ACCOUNT_USERNAME)} ga reels'ni "Yuborish" qilasiz —`,
+  'men videoni ham, musiqa nomini ham shu yerga tashlayman.',
+  'Buning uchun bir marta bog\'lanish kerak: /start',
+  '',
   '<b>Buyruqlar</b>',
-  '',
-  '/start — bog\'lanishni boshlash yoki kodni qayta olish',
+  '/start — Instagram bilan bog\'lanish kodini olish',
   '/status — bog\'lanish holati va oxirgi so\'rovlar',
-  '/unlink — bog\'lanishni bekor qilish (yangi kod beriladi)',
+  '/unlink — bog\'lanishni bekor qilish',
   '/help — shu yordam',
-  '',
-  `<b>Qanday ishlaydi:</b> Instagram'da @${escapeHtml(env.IG_ACCOUNT_USERNAME)} ga reels yuborasiz → men uni yuklab olaman → musiqasini aniqlayman → video + qo'shiq nomini shu yerga yuboraman.`,
 ].join('\n');
 
 export const NOT_LINKED_HINT =
@@ -70,6 +82,26 @@ export const IG_CODE_NOT_FOUND =
 
 export const IG_UNSUPPORTED_ATTACHMENT =
   '🤔 Bu turdagi xabarni qayta ishlay olmayman. Iltimos, reels yoki video yuboring.';
+
+export const IG_ALREADY_LINKED =
+  '✅ Bu akkaunt allaqachon bog\'langan. Kod yuborish shart emas — to\'g\'ridan-to\'g\'ri reels tashlang.';
+
+/** Attachment turiga qarab aniqroq javob. */
+export function igUnsupportedReply(attachmentType: string | null): string {
+  switch (attachmentType) {
+    case 'image':
+      return '🖼 Bu rasm — men esa musiqani videodan aniqlayman. Reels yoki video yuboring.';
+    case 'story_mention':
+      return '📖 Story\'da eslatganingiz uchun rahmat! Musiqani topish uchun reels\'ni DM orqali "Yuborish" qiling.';
+    case 'audio':
+    case 'voice':
+      return '🎤 Ovozli xabarni emas, reels/video yuboring — musiqani videodan aniqlayman.';
+    case 'file':
+      return '📎 Faylni emas, Instagram\'dagi reels\'ni "Yuborish" tugmasi orqali yuboring.';
+    default:
+      return IG_UNSUPPORTED_ATTACHMENT;
+  }
+}
 
 export const IG_QUEUED =
   '⏳ Qabul qilindi! Videoni yuklab, musiqasini aniqlayapman — natijani Telegram\'ga yuboraman.';

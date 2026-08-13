@@ -24,19 +24,40 @@ Asosiy muammo — bitta Instagram akkauntga ko'plab userlar yozadi, har birini t
 
 ## Oqim (arxitektura)
 
+Botga **ikki xil kirish nuqtasi** bor. Ikkalasi ham bitta navbat va bitta worker'ga tushadi.
+
 ```
+① Instagram reels (bog'lanish talab qiladi, Meta App kerak)
+
 Telegram user  ──/start──►  Bot  ──►  users (link_code = LINK-AB12CD)
                                           │
 Instagram DM: "LINK-AB12CD" ──webhook──►  link_status = linked, ig_scoped_id saqlanadi
                                           │
-Instagram DM: reels ────────webhook──►  requests (status=queued)
+Instagram DM: reels ────────webhook──►  requests (media_type = ig_reel)
                                           │
+                          natija: 📹 video + 🎵 qo'shiq nomi
+
+② To'g'ridan-to'g'ri Telegram (bog'lanish shart emas, Meta ham kerak emas)
+
+Telegram user ──video/audio yuboradi──►  requests (media_type = telegram_file)
+                                          │
+                          natija: 🎵 faqat qo'shiq nomi
+                                  (video foydalanuvchida allaqachon bor)
+
+                     ▼ ikkalasi uchun umumiy ▼
                                      Worker (polling)
                                           │
-                    CDN'dan video yuklash → ffmpeg audio → AudD
+                        media yuklash → ffmpeg audio parcha → AudD
                                           │
-                          Telegram: 📹 video + 🎵 qo'shiq nomi
+                                   Telegram javobi
 ```
+
+**②-yo'l bugundan ishlaydi** — Meta App, webhook, ngrok yoki bog'lash kodi kerak emas.
+Foydalanuvchi botga video, GIF, ovozli xabar yoki audio tashlaydi (20MB gacha —
+Telegram botlarining yuklab olish limiti), bot musiqa nomini qaytaradi.
+
+> Bazada Telegram media uchun URL emas, **`file_id`** saqlanadi: URL ichida bot tokeni
+> bo'ladi va u ~1 soatda eskiradi, `file_id` esa doimiy va xavfsiz.
 
 ---
 
@@ -175,6 +196,38 @@ Javob: `{"ok":true,"worker":{...},"queue":{"queued":0,"processing":0,"done":0,"f
 
 ---
 
+## 6b. Mock rejim — Meta App'siz sinash
+
+Meta App Review va Instagram Business ulash qo'lda bajariladigan bosqich. Uni kutmasdan
+butun oqimni sinash uchun `.env` da:
+
+```
+MOCK_INSTAGRAM=true
+```
+
+Bunda:
+- Webhook imzosi tekshirilmaydi, Instagram'ga DM yuborilmaydi (log'ga yoziladi)
+- `IG_APP_SECRET` / `IG_ACCESS_TOKEN` bo'sh bo'lsa ham ilova ishga tushadi
+- **Telegram va Supabase haqiqiy bo'lib qoladi** — ya'ni bog'lash va video yuborish chinakam ishlaydi
+
+Instagram'dan xabar kelganini taqlid qilish (server ishlab turganda, boshqa terminalda):
+
+```bash
+node src/dev/mock-cli.ts text IGSID_TEST "LINK-AB12CD"
+```
+
+```bash
+node src/dev/mock-cli.ts reel IGSID_TEST
+```
+
+Birinchisi — "Instagram'dan bog'lash kodi keldi", ikkinchisi — "reels yuborildi"
+(namuna video `MOCK_SAMPLE_VIDEO_URL` dan olinadi).
+
+`MOCK_AUDD=true` esa musiqa aniqlashni soxta natija bilan almashtiradi — AudD limitini
+sarflamasdan sinash uchun.
+
+---
+
 ## 7. To'liq oqimni sinash
 
 1. Telegram'da botingizga **/start** → `LINK-XXXXXX` kodini olasiz.
@@ -188,6 +241,24 @@ Bog'lanish holatini ko'rish: **/status** · bekor qilish: **/unlink**
 ---
 
 ## Buyruqlar (bot)
+
+Buyruqdan tashqari: botga **video, GIF, ovozli xabar yoki audio** yuborsangiz —
+musiqa nomini qaytaradi (bog'lanish shart emas). Rasm yuborilsa rad etadi.
+
+### Natija xabari
+
+Musiqa topilganda javob quyidagilardan iborat:
+
+- 🖼 albom muqovasi (Spotify/Apple/Deezer'dan)
+- 🎵 nomi, ijrochisi, albomi
+- 1️⃣–5️⃣ **shu qo'shiqning versiyalari** (asl ijro, kaverlar, karaoke) — Deezer qidiruvidan,
+  nomi mos kelganlari filtrlanadi va takrorlari tashlanadi
+- Tugma bosilganda o'sha versiyaning **30 soniyalik rasmiy preview**'i audio fayl bo'lib keladi
+- 🎧 Spotify · 🍎 Apple Music · 💜 Deezer · 🔍 YouTube — to'liq qo'shiqni tinglash uchun
+
+> **To'liq qo'shiq yuklab berilmaydi.** Tijoriy trekni yuklab tarqatish mualliflik huquqini
+> buzadi. Bot faqat platformalar tinglatish uchun ochiq beradigan 30 soniyalik parchani
+> yuboradi va to'liq qo'shiqqa havola qiladi. Deezer qidiruvi kalit talab qilmaydi.
 
 | Buyruq | Vazifasi |
 |---|---|

@@ -26,9 +26,17 @@ export interface DownloadedFile {
  * yuklab olamiz. Muddati o'tgan bo'lsa Meta CDN 403/410 qaytaradi —
  * bu holatda retry ma'nosiz (PermanentError).
  */
-export async function downloadVideo(url: string, requestId: number): Promise<DownloadedFile> {
+export interface DownloadOptions {
+  /** Telegram'dan kelgan ovozli xabar / audio fayllar uchun. Instagram'da — false. */
+  allowAudio?: boolean;
+}
+
+export async function downloadMedia(
+  url: string,
+  requestId: number,
+  options: DownloadOptions = {},
+): Promise<DownloadedFile> {
   await ensureTmpDir();
-  const filePath = path.join(env.TMP_DIR, `reel-${requestId}-${Date.now()}.mp4`);
 
   const res = await fetchWithTimeout(url, { redirect: 'follow' }, 120_000);
 
@@ -44,6 +52,14 @@ export async function downloadVideo(url: string, requestId: number): Promise<Dow
     }
     throw new PermanentError(`Media yuklashda kutilmagan status: ${res.status}`);
   }
+
+  const contentType = res.headers.get('content-type');
+  assertMediaContentType(contentType, url, options.allowAudio ?? false);
+
+  const filePath = path.join(
+    env.TMP_DIR,
+    `media-${requestId}-${Date.now()}${extensionFor(contentType)}`,
+  );
 
   // Server hajmni oldindan aytsa — behuda yuklamaymiz
   const declared = Number(res.headers.get('content-length') ?? '0');
@@ -84,8 +100,69 @@ export async function downloadVideo(url: string, requestId: number): Promise<Dow
     throw new TransientError('Yuklab olingan fayl bo\'sh');
   }
 
-  logger.info({ requestId, bytes, filePath }, 'Video yuklab olindi');
-  return { filePath, bytes, contentType: res.headers.get('content-type') };
+  logger.info(
+    { requestId, bytes, size: formatBytes(bytes), contentType, filePath },
+    'Video yuklab olindi',
+  );
+  return { filePath, bytes, contentType };
+}
+
+/**
+ * CDN javobi haqiqatan video ekanini tekshiradi.
+ *
+ * Bu muhim: havola eskirgan yoki noto'g'ri bo'lsa Meta CDN 200 bilan HTML
+ * (login sahifasi) yoki JSON xato qaytarishi mumkin. Tekshirmasak, o'sha
+ * HTML'ni ".mp4" deb Telegram'ga yuborishga urinamiz va tushunarsiz xato olamiz.
+ */
+function assertMediaContentType(
+  contentType: string | null,
+  url: string,
+  allowAudio: boolean,
+): void {
+  if (!contentType) return; // sarlavha yo'q bo'lsa — to'sib qo'ymaymiz
+
+  const type = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
+
+  if (type.startsWith('video/') || type === 'application/octet-stream') return;
+  if (allowAudio && type.startsWith('audio/')) return;
+
+  if (type.startsWith('image/')) {
+    throw new PermanentError(
+      `Video emas, rasm keldi: ${type} (${url.slice(0, 120)})`,
+      '🖼 Bu reels emas, rasm ekan. Musiqani faqat videodan aniqlay olaman.',
+    );
+  }
+
+  throw new PermanentError(
+    `Kutilmagan content-type: ${type} (${url.slice(0, 120)})`,
+    '⏳ Video havolasi ishlamadi — ehtimol muddati o\'tgan. Reels\'ni qaytadan yuboring.',
+  );
+}
+
+/** content-type ga qarab fayl kengaytmasi. */
+function extensionFor(contentType: string | null): string {
+  const type = contentType?.split(';')[0]?.trim().toLowerCase() ?? '';
+  switch (type) {
+    case 'video/quicktime':
+      return '.mov';
+    case 'video/webm':
+      return '.webm';
+    case 'video/x-matroska':
+      return '.mkv';
+    case 'audio/mpeg':
+      return '.mp3';
+    case 'audio/ogg':
+    case 'audio/opus':
+      return '.ogg';
+    case 'audio/mp4':
+    case 'audio/x-m4a':
+      return '.m4a';
+    case 'audio/wav':
+    case 'audio/x-wav':
+      return '.wav';
+    default:
+      return type.startsWith('audio/') ? '.audio' : '.mp4';
+  }
 }
 
 /**
@@ -100,7 +177,11 @@ export async function extractAudioSnippet(
 ): Promise<string | null> {
   if (!env.USE_FFMPEG) return null;
 
-  const audioPath = videoPath.replace(/\.mp4$/i, '') + `-snippet.mp3`;
+  // Har qanday kengaytmani (.mp4/.mov/.webm) olib tashlaymiz
+  const audioPath = path.join(
+    path.dirname(videoPath),
+    `${path.basename(videoPath, path.extname(videoPath))}-snippet.mp3`,
+  );
   const args = [
     '-hide_banner',
     '-loglevel', 'error',

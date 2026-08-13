@@ -21,6 +21,20 @@ const envSchema = z.object({
   // Telegram
   TELEGRAM_BOT_TOKEN: z.string().min(20, 'TELEGRAM_BOT_TOKEN yaroqsiz'),
 
+  /**
+   * Mock rejim. `MOCK_MODE` — umumiy kalit; `MOCK_INSTAGRAM` va `MOCK_AUDD`
+   * bilan har birini alohida boshqarish mumkin (masalan AudD haqiqiy,
+   * Instagram esa hali mock). Telegram HAR DOIM haqiqiy.
+   * Ishlab chiqarishda hammasi false bo'lishi kerak.
+   */
+  MOCK_MODE: boolish(false),
+  MOCK_INSTAGRAM: boolish(false),
+  MOCK_AUDD: boolish(false),
+  MOCK_SAMPLE_VIDEO_URL: z
+    .string()
+    .url()
+    .default('https://www.w3schools.com/html/mov_bbb.mp4'),
+
   // Instagram / Meta
   IG_ACCOUNT_USERNAME: z.string().min(1).transform((v) => v.replace(/^@/, '')),
   IG_APP_SECRET: z.string().min(1),
@@ -53,6 +67,36 @@ const envSchema = z.object({
   USE_FFMPEG: boolish(true),
   FFMPEG_PATH: z.string().default('ffmpeg'),
 });
+
+/**
+ * Mock rejimni hal qilish va hali olinmagan kalitlar o'rniga placeholder
+ * qo'yish — shunda ilova ishga tushadi. Haqiqiy kalit kelgach mos
+ * MOCK_* ni false qilasiz va sxema yana uni majburiy talab qiladi.
+ */
+const asBool = (v: string | undefined): boolean =>
+  ['1', 'true', 'yes', 'on'].includes((v ?? '').trim().toLowerCase());
+const isSet = (name: string): boolean => (process.env[name] ?? '').trim() !== '';
+
+const mockAll = asBool(process.env['MOCK_MODE']);
+const mockInstagram = isSet('MOCK_INSTAGRAM') ? asBool(process.env['MOCK_INSTAGRAM']) : mockAll;
+const mockAudd = isSet('MOCK_AUDD') ? asBool(process.env['MOCK_AUDD']) : mockAll;
+
+// Hal qilingan qiymatlarni sxema ko'radigan holga keltiramiz
+process.env['MOCK_INSTAGRAM'] = String(mockInstagram);
+process.env['MOCK_AUDD'] = String(mockAudd);
+
+if (mockInstagram) {
+  for (const [key, value] of Object.entries({
+    IG_APP_SECRET: 'mock-app-secret',
+    IG_ACCESS_TOKEN: 'mock-access-token',
+    IG_WEBHOOK_VERIFY_TOKEN: 'mock-verify-token',
+  })) {
+    if (!isSet(key)) process.env[key] = value;
+  }
+}
+if (mockAudd && !isSet('AUDD_API_TOKEN')) {
+  process.env['AUDD_API_TOKEN'] = 'mock-audd-token';
+}
 
 // Supabase paneli o'z snippetida `NEXT_PUBLIC_SUPABASE_URL` nomini beradi —
 // shu nom bilan yozilgan bo'lsa ham qabul qilamiz.

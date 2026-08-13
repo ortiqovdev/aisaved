@@ -8,6 +8,12 @@ import { PermanentError, TransientError, fetchWithTimeout, errMessage } from '..
  * Imzo XOM (raw) body ustidan hisoblanadi — JSON.parse dan keyingi obyekt emas!
  */
 export function verifyWebhookSignature(rawBody: Buffer, signatureHeader: string | undefined): boolean {
+  // Mock rejimda haqiqiy IG_APP_SECRET yo'q — imzoni tekshirib bo'lmaydi.
+  if (env.MOCK_INSTAGRAM) {
+    logger.warn('MOCK_MODE: webhook imzosi TEKSHIRILMADI');
+    return true;
+  }
+
   if (!signatureHeader) {
     logger.warn('Webhook imzosi yo\'q (x-hub-signature-256)');
     return false;
@@ -32,6 +38,11 @@ export function verifyWebhookSignature(rawBody: Buffer, signatureHeader: string 
  * berayotganimiz uchun bu shart bajariladi.
  */
 export async function sendInstagramText(igScopedId: string, text: string): Promise<void> {
+  if (env.MOCK_INSTAGRAM) {
+    logger.info({ igScopedId, text }, '📨 [MOCK] Instagram DM (haqiqatda yuborilmadi)');
+    return;
+  }
+
   const url = `${env.IG_GRAPH_BASE_URL}/me/messages`;
 
   const res = await fetchWithTimeout(
@@ -68,6 +79,43 @@ export async function trySendInstagramText(igScopedId: string, text: string): Pr
     await sendInstagramText(igScopedId, text);
   } catch (e) {
     logger.warn({ igScopedId, err: errMessage(e) }, 'Instagram DM yuborilmadi');
+  }
+}
+
+export type SenderAction = 'mark_seen' | 'typing_on' | 'typing_off';
+
+/**
+ * "Ko'rildi" belgisi va "yozmoqda..." indikatori.
+ * Foydalanuvchi javob kutayotganini bilib turadi — bu yerda xato bo'lsa
+ * asosiy oqim to'xtamaydi, shuning uchun faqat log qilamiz.
+ */
+export async function trySendInstagramAction(
+  igScopedId: string,
+  action: SenderAction,
+): Promise<void> {
+  if (env.MOCK_INSTAGRAM) {
+    logger.debug({ igScopedId, action }, '👀 [MOCK] Instagram sender_action');
+    return;
+  }
+
+  try {
+    const res = await fetchWithTimeout(
+      `${env.IG_GRAPH_BASE_URL}/me/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${env.IG_ACCESS_TOKEN}`,
+        },
+        body: JSON.stringify({ recipient: { id: igScopedId }, sender_action: action }),
+      },
+      10_000,
+    );
+    if (!res.ok) {
+      logger.debug({ igScopedId, action, status: res.status }, 'sender_action qabul qilinmadi');
+    }
+  } catch (e) {
+    logger.debug({ igScopedId, action, err: errMessage(e) }, 'sender_action yuborilmadi');
   }
 }
 
@@ -129,6 +177,11 @@ export function extractVideoAttachment(event: IgMessagingEvent): ExtractedMedia 
     }
   }
   return null;
+}
+
+/** Birinchi attachment turi — mos javob matnini tanlash uchun. */
+export function firstAttachmentType(event: IgMessagingEvent): string | null {
+  return event.message?.attachments?.[0]?.type ?? null;
 }
 
 /** Barcha entry'lardagi messaging eventlarni bitta ro'yxatga yig'adi. */

@@ -5,9 +5,11 @@ import { PermanentError, TransientError, errMessage } from '../lib/errors.ts';
 import type { RequestRow } from '../db/types.ts';
 import * as usersRepo from '../db/users.repo.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
-import { downloadVideo, extractAudioSnippet, safeUnlink } from '../services/media.ts';
+import { downloadMedia, extractAudioSnippet, safeUnlink } from '../services/media.ts';
 import { identifySong, type SongInfo } from '../services/audd.ts';
-import { sendResult } from '../bot/notify.ts';
+import { resolveTelegramFileUrl } from '../services/telegram-files.ts';
+import { TELEGRAM_SOURCE } from '../lib/constants.ts';
+import { sendResult, sendSongOnly } from '../bot/notify.ts';
 
 /**
  * Bitta jobni to'liq bajaradi:
@@ -23,12 +25,21 @@ export async function processRequest(job: RequestRow): Promise<void> {
     throw new PermanentError(`user_id=${job.user_id} topilmadi`);
   }
 
+  // Media ikki manbadan kelishi mumkin: Instagram DM yoki to'g'ridan-to'g'ri Telegram
+  const fromTelegram = job.media_type === TELEGRAM_SOURCE;
+
   let videoPath: string | null = null;
   let audioPath: string | null = null;
 
   try {
-    // 1) Video (media URL ~7 kun amal qiladi — shu sabab darhol yuklaymiz)
-    const downloaded = await downloadVideo(job.media_url, job.id);
+    // 1) Manba havolasi.
+    //    Instagram: webhookdagi CDN URL (~7 kun amal qiladi — darhol yuklaymiz)
+    //    Telegram:  file_id -> vaqtinchalik URL (~1 soat)
+    const sourceUrl = fromTelegram
+      ? await resolveTelegramFileUrl(job.media_url)
+      : job.media_url;
+
+    const downloaded = await downloadMedia(sourceUrl, job.id, { allowAudio: fromTelegram });
     videoPath = downloaded.filePath;
 
     // 2) Musiqa aniqlash uchun qisqa audio parcha (ffmpeg bo'lsa)
@@ -37,12 +48,20 @@ export async function processRequest(job: RequestRow): Promise<void> {
     // 3) AudD
     const song = await identifyWithFallback(audioPath ?? videoPath, job, log);
 
-    // 4) Telegram'ga yuborish
-    await sendToTelegram(user.telegram_id, videoPath, song);
+    // 4) Javob.
+    //    Telegram'dan kelgan bo'lsa videoni qaytarib yubormaymiz — u foydalanuvchida
+    //    allaqachon bor. Instagram'dan kelganda esa video + caption yuboriladi.
+    if (fromTelegram) {
+      await withTelegramErrors(() => sendSongOnly(user.telegram_id, song));
+    } else {
+      await withTelegramErrors(() => sendResult(user.telegram_id, videoPath!, song));
+    }
 
     // 5) Bazaga yozish
     await requestsRepo.markDone(job.id, {
-      video_file_path: videoPath,
+      // Fayl vaqtinchalik — yuborilgach o'chiriladi, shuning uchun bazada
+      // o'lik yo'lni saqlamaymiz.
+      video_file_path: null,
       song_title: song?.title ?? null,
       song_artist: song?.artist ?? null,
       song_album: song?.album ?? null,
@@ -79,13 +98,9 @@ async function identifyWithFallback(
 }
 
 /** Telegram xatolarini retry-qilinadigan / qilinmaydiganga ajratadi. */
-async function sendToTelegram(
-  telegramId: number,
-  videoPath: string,
-  song: SongInfo | null,
-): Promise<void> {
+async function withTelegramErrors(send: () => Promise<void>): Promise<void> {
   try {
-    await sendResult(telegramId, videoPath, song);
+    await send();
   } catch (e) {
     if (e instanceof GrammyError) {
       // 403 — user botni bloklagan yoki chatni o'chirgan: qayta urinish foydasiz

@@ -6,6 +6,7 @@ import { assertDbReady } from './db/supabase.ts';
 import * as requestsRepo from './db/requests.repo.ts';
 import { bot, setupBotCommands } from './bot/index.ts';
 import { instagramWebhookRouter } from './webhook/instagram.ts';
+import { devMockRouter } from './webhook/dev-mock.ts';
 import { startWorkers, stopWorkers, workerStatus } from './workers/index.ts';
 import { ensureTmpDir } from './services/media.ts';
 
@@ -42,6 +43,11 @@ app.get('/health', async (_req, res) => {
 
 app.use('/webhook/instagram', instagramWebhookRouter);
 
+// Faqat Instagram mock rejimida — webhook'ni taqlid qiluvchi endpointlar
+if (env.MOCK_INSTAGRAM) {
+  app.use('/dev/mock', devMockRouter);
+}
+
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
@@ -57,6 +63,22 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  logger.info(
+    {
+      instagram: env.MOCK_INSTAGRAM ? 'MOCK' : 'haqiqiy',
+      audd: env.MOCK_AUDD ? 'MOCK' : 'haqiqiy',
+      telegram: 'haqiqiy',
+      supabase: 'haqiqiy',
+    },
+    'Servis rejimlari',
+  );
+  if (env.MOCK_INSTAGRAM) {
+    logger.warn(
+      '⚠️  Instagram MOCK rejimida — webhook imzosi tekshirilmaydi, DM yuborilmaydi. ' +
+        'Sinov: POST /dev/mock/text, POST /dev/mock/reel',
+    );
+  }
+
   await assertDbReady();
   await ensureTmpDir();
 
