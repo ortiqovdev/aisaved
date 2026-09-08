@@ -115,11 +115,16 @@ export function igUnsupportedReply(attachmentType: string | null): string {
  * yo'naltiramiz.
  */
 export function igReelNotDownloadable(botUsername: string): string {
+  // DIQQAT: bu xabar faqat resolver ULANMAGAN holatda chiqadi. Shuning uchun
+  // "havolani Telegram'ga tashlang" deb aytib bo'lmaydi — havola oqimi ham
+  // o'sha resolverga tayanadi, ya'ni foydalanuvchini ishlamaydigan yo'lga
+  // yuborgan bo'lardik. Faqat HOZIR ishlaydigan yo'lni ko'rsatamiz: faylni
+  // to'g'ridan-to'g'ri Telegram'ga tashlash.
   const lines = [
-    '😕 Instagram bu reels\'ning video faylini bermadi.',
+    '😕 Instagram bu reels\'ning video faylini bermadi — bu Instagram tomonidagi cheklov.',
     '',
-    'Buning o\'rniga reels\'ning HAVOLASINI nusxalab (Share → Copy link), ',
-    'Telegram botimizga tashlang — videoni ham, musiqa nomini ham yuboraman.',
+    'Hozircha videoni o\'zingiz saqlab, Telegram botimizga tashlang —',
+    'musiqa nomini darhol topib beraman.',
   ];
   if (botUsername !== '') lines.push('', `👉 https://t.me/${botUsername}`);
   return lines.join('\n');

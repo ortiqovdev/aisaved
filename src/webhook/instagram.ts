@@ -219,9 +219,8 @@ async function handleMedia(
     await trySendInstagramText(igScopedId, igReelNotDownloadable(getBotUsername()));
     await trySendText(
       user.telegram_id,
-      '😕 Instagram bu reels\'ning video faylini bermadi.\n\n' +
-        'Reels havolasini nusxalab (Share → Copy link) shu yerga tashlang — ' +
-        'videoni ham, musiqa nomini ham yuboraman.',
+      '😕 Instagram bu reels\'ning video faylini bermadi — bu Instagram tomonidagi cheklov.\n\n' +
+        'Hozircha videoni o\'zingiz saqlab shu yerga tashlang — musiqa nomini darhol topaman.',
     );
     return;
   }
