@@ -110,12 +110,18 @@ async function handleEvent(event: IgMessagingEvent): Promise<void> {
   // "Ko'rildi" — foydalanuvchi xabari yetib borganini darhol biladi
   await trySendInstagramAction(senderId, 'mark_seen');
 
-  // VAQTINCHALIK DIAGNOSTIKA: Meta reels uchun qanday payload yuborayotganini
-  // ko'rish uchun. Media havolasi muammosi hal bo'lgach olib tashlanadi.
+  /**
+   * Attachment payloadining xom ko'rinishi — Meta formatni o'zgartirganda
+   * yoki yangi tur paydo bo'lganda tekshirish uchun asqotadi.
+   *
+   * `debug` darajasida: payload ichida foydalanuvchining post matni (caption)
+   * bo'ladi, uni odatiy logga yozib yurishning hojati yo'q. Kerak bo'lganda
+   * `LOG_LEVEL=debug` bilan yoqiladi.
+   */
   if ((message.attachments?.length ?? 0) > 0) {
-    logger.info(
+    logger.debug(
       { attachments: JSON.stringify(message.attachments) },
-      '🔍 Instagram attachment payload (diagnostika)',
+      'Instagram attachment payload',
     );
   }
 

@@ -1,7 +1,8 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { env, isProd } from './config/env.ts';
 import { logger } from './lib/logger.ts';
-import { errMessage } from './lib/errors.ts';
+import type { UserFromGetMe } from 'grammy/types';
+import { errMessage, sleep } from './lib/errors.ts';
 import { assertDbReady } from './db/supabase.ts';
 import * as requestsRepo from './db/requests.repo.ts';
 import { bot, setBotUsername, setupBotCommands } from './bot/index.ts';
@@ -62,6 +63,31 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 // Bootstrap
 // ---------------------------------------------------------------------------
 
+/**
+ * Ishga tushishda Telegram bilan aloqani o'rnatadi.
+ *
+ * Nega qayta urinish kerak: ba'zi tarmoqlarda api.telegram.org ga ulanish
+ * beqaror bo'ladi — o'lchangan holat: uchtadan bittasi `UND_ERR_CONNECT_TIMEOUT`
+ * bilan uziladi, qolgan ikkitasi 600ms da javob beradi. Bitta shunday uzilish
+ * butun jarayonni o'ldirmasligi kerak, aks holda server tasodifiy ravishda
+ * ko'tarilmay qoladi.
+ */
+async function getMeWithRetry(attempts = 5): Promise<UserFromGetMe> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await bot.api.getMe();
+    } catch (e) {
+      if (attempt >= attempts) throw e;
+      const delay = Math.min(2000 * 2 ** (attempt - 1), 15_000);
+      logger.warn(
+        { attempt, of: attempts, err: errMessage(e), retryInMs: delay },
+        'Telegram bilan aloqa o\'rnatilmadi — qayta urinamiz',
+      );
+      await sleep(delay);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   logger.info(
     {
@@ -86,7 +112,7 @@ async function main(): Promise<void> {
   // ...va uzoq ishlaydigan serverda ular yana to'planmasligi uchun davriy ravishda
   startTmpCleanup();
 
-  const me = await bot.api.getMe();
+  const me = await getMeWithRetry();
   setBotUsername(me.username);
   logger.info({ username: me.username }, 'Telegram bot ulandi');
   await setupBotCommands();
