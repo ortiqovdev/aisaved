@@ -15,6 +15,8 @@ import {
   type IgMessagingEvent,
   type IgWebhookBody,
 } from '../services/instagram.ts';
+import { isResolverConfigured, parseInstagramLink } from '../services/ig-resolver.ts';
+import { IG_LINK_SOURCE } from '../lib/constants.ts';
 import { trySendText } from '../bot/notify.ts';
 import { getBotUsername } from '../bot/index.ts';
 import {
@@ -195,15 +197,24 @@ async function handleMedia(
   }
 
   /**
-   * Meta video fayl o'rniga reels SAHIFASINING havolasini yuborgan bo'lsa,
-   * jobni navbatga qo'ymaymiz: u muqarrar `text/html` xatosi bilan yiqiladi
-   * va foydalanuvchi "havola eskirgan" degan noto'g'ri sabab oladi.
-   * Buning o'rniga darhol ishlaydigan yo'lni ko'rsatamiz.
+   * Meta ba'zi reels uchun video fayl o'rniga reels SAHIFASINING havolasini
+   * yuboradi (`instagram.com/reel/XXX/`). U `text/html` qaytaradi, ya'ni
+   * to'g'ridan-to'g'ri yuklab bo'lmaydi.
+   *
+   * Bunday havolani foydalanuvchiga qaytarib "o'zingiz tashlang" deyish shart
+   * emas — bu aynan resolver hal qiladigan ish. Shuning uchun jobni HAVOLA
+   * turida navbatga qo'yamiz: worker uni yechadi, videoni yuklaydi va natija
+   * baribir Telegram'ga VIDEO bo'lib boradi — foydalanuvchi uchun farqi yo'q.
    */
-  if (!media.downloadable) {
-    logger.info(
-      { igScopedId, type: media.type, url: media.url },
-      'Meta media fayli o\'rniga sahifa havolasini yubordi — navbatga qo\'yilmadi',
+  const link = media.downloadable ? null : parseInstagramLink(media.url);
+  const viaResolver = link !== null && isResolverConfigured();
+
+  if (!media.downloadable && !viaResolver) {
+    // Resolver ulanmagan (yoki havola tanilmadi) — bu yagona holat, bunda
+    // foydalanuvchiga ishlaydigan muqobil yo'lni ko'rsatamiz.
+    logger.warn(
+      { igScopedId, type: media.type, url: media.url, resolver: isResolverConfigured() },
+      'Meta media o\'rniga sahifa havolasini yubordi, resolver esa yo\'q',
     );
     await trySendInstagramText(igScopedId, igReelNotDownloadable(getBotUsername()));
     await trySendText(
@@ -229,13 +240,20 @@ async function handleMedia(
   const row = await requestsRepo.enqueue({
     userId: user.id,
     igMessageId: event.message?.mid ?? null,
-    mediaUrl: media.url,
-    mediaType: media.type,
+    // Havola bo'lsa kanonik ko'rinishini saqlaymiz — worker uni resolver
+    // orqali yechadi; CDN havolasi bo'lsa o'zini (u darhol yuklanadi).
+    mediaUrl: link ? link.url : media.url,
+    mediaType: link ? IG_LINK_SOURCE : media.type,
+    // Shortcode doimiy: ayni reels qayta yuborilsa musiqa keshdan olinadi
+    ...(link ? { fileUniqueId: `ig:${link.shortcode}` } : {}),
   });
 
   if (!row) return; // dublikat webhook — javob ham takrorlanmasin
 
-  logger.info({ requestId: row.id, userId: user.id, mediaType: media.type }, 'Navbatga qo\'shildi');
+  logger.info(
+    { requestId: row.id, userId: user.id, mediaType: media.type, viaResolver },
+    'Navbatga qo\'shildi',
+  );
   await trySendInstagramText(igScopedId, IG_QUEUED);
   await trySendText(user.telegram_id, '⏳ Reels qabul qilindi, ishlov berilmoqda...');
 }
