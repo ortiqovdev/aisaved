@@ -8,7 +8,7 @@ import { bot, setBotUsername, setupBotCommands } from './bot/index.ts';
 import { instagramWebhookRouter } from './webhook/instagram.ts';
 import { devMockRouter } from './webhook/dev-mock.ts';
 import { startWorkers, stopWorkers, workerStatus } from './workers/index.ts';
-import { cleanupTmpDir, ensureTmpDir } from './services/media.ts';
+import { cleanupTmpDir, ensureTmpDir, startTmpCleanup, stopTmpCleanup } from './services/media.ts';
 
 const app = express();
 
@@ -83,6 +83,8 @@ async function main(): Promise<void> {
   await ensureTmpDir();
   // Jarayon avval job o'rtasida qulagan bo'lsa, tmp'da o'lik fayllar qoladi
   await cleanupTmpDir();
+  // ...va uzoq ishlaydigan serverda ular yana to'planmasligi uchun davriy ravishda
+  startTmpCleanup();
 
   const me = await bot.api.getMe();
   setBotUsername(me.username);
@@ -108,6 +110,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'To\'xtatilmoqda...');
     stopWorkers();
+    stopTmpCleanup();
     try {
       await bot.stop();
     } catch (e) {

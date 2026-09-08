@@ -10,18 +10,25 @@
 import { logger } from './lib/logger.ts';
 import { errMessage } from './lib/errors.ts';
 import { assertDbReady } from './db/supabase.ts';
-import { cleanupTmpDir, ensureTmpDir } from './services/media.ts';
+import {
+  cleanupTmpDir,
+  ensureTmpDir,
+  startTmpCleanup,
+  stopTmpCleanup,
+} from './services/media.ts';
 import { startWorkers, stopWorkers } from './workers/index.ts';
 
 async function main(): Promise<void> {
   await assertDbReady();
   await ensureTmpDir();
   await cleanupTmpDir();
+  startTmpCleanup();
   startWorkers();
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'Worker to\'xtatilmoqda...');
     stopWorkers();
+    stopTmpCleanup();
     setTimeout(() => process.exit(0), 5_000).unref();
   };
 

@@ -47,6 +47,38 @@ export async function cleanupTmpDir(maxAgeMs = 6 * 60 * 60_000): Promise<number>
   return removed;
 }
 
+/** Davriy tozalash taymeri — ikki marta yoqilmasligi uchun modul ichida. */
+let cleanupTimer: NodeJS.Timeout | null = null;
+
+/**
+ * `cleanupTmpDir` ni davriy ravishda chaqiradi.
+ *
+ * Faqat ishga tushishda tozalash YETARLI EMAS: server oylab qayta ishga
+ * tushmasligi mumkin, jarayon esa job o'rtasida qulaganda `finally` bloki
+ * bajarilmay qoladi va vaqtinchalik video diskda qolib ketadi.
+ *
+ * Chegaralar arifmetikasi: tekshiruv har SOATDA, fayl esa 5 SOATDAN oshsa
+ * o'chiriladi — ya'ni eng yomon holatda ham fayl 6 soatdan ortiq yashamaydi.
+ * Maxfiylik siyosatida ("within 6 hours") aynan shu va'da berilgan.
+ */
+export function startTmpCleanup(intervalMs = 60 * 60_000, maxAgeMs = 5 * 60 * 60_000): void {
+  if (cleanupTimer) return;
+  cleanupTimer = setInterval(() => {
+    void cleanupTmpDir(maxAgeMs).catch((e) =>
+      logger.warn({ err: errMessage(e) }, 'Davriy tmp tozalash muvaffaqiyatsiz'),
+    );
+  }, intervalMs);
+  // Taymer jarayonni tirik ushlab turmasligi kerak
+  cleanupTimer.unref();
+  logger.debug({ intervalMs }, 'Vaqtinchalik fayllarni davriy tozalash yoqildi');
+}
+
+export function stopTmpCleanup(): void {
+  if (!cleanupTimer) return;
+  clearInterval(cleanupTimer);
+  cleanupTimer = null;
+}
+
 export interface DownloadedFile {
   filePath: string;
   bytes: number;
