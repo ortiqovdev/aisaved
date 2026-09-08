@@ -47,16 +47,21 @@ export function alreadyLinked(igScopedId: string | null): string {
 }
 
 export const HELP_TEXT = [
-  '<b>Musiqani topishning ikki yo\'li bor</b>',
+  '<b>Musiqani topishning uch yo\'li bor</b>',
   '',
-  '<b>1️⃣ Eng oson — videoni shu yerga tashlang</b>',
+  '<b>1️⃣ Havola yuboring — eng qulayi</b>',
+  'Instagram\'da reels ostidagi <b>Share → Copy link</b> ni bosing va havolani shu yerga tashlang.',
+  'Men videoni ham, musiqa nomini ham qaytaraman. Bog\'lanish shart emas.',
+  '',
+  '<b>2️⃣ Videoni to\'g\'ridan-to\'g\'ri tashlang</b>',
   'Video, GIF, ovozli xabar yoki audio yuboring — musiqa nomini javob qilaman.',
-  'Hech narsa bog\'lash shart emas. (Fayl 20MB gacha bo\'lsin.)',
+  '(Fayl 20MB gacha bo\'lsin.)',
   '',
-  `<b>2️⃣ Instagram reels uchun</b>`,
-  `Instagram'da @${escapeHtml(env.IG_ACCOUNT_USERNAME)} ga reels'ni "Yuborish" qilasiz —`,
-  'men videoni ham, musiqa nomini ham shu yerga tashlayman.',
+  `<b>3️⃣ Instagram DM orqali</b>`,
+  `Instagram'da @${escapeHtml(env.IG_ACCOUNT_USERNAME)} ga reels'ni "Yuborish" qilasiz.`,
   'Buning uchun bir marta bog\'lanish kerak: /start',
+  '<i>Eslatma: Instagram ba\'zi reels\'larning faylini bermaydi — bunday holatda',
+  'sizdan havolani so\'rayman (1-yo\'l).</i>',
   '',
   '<b>Buyruqlar</b>',
   '/start — Instagram bilan bog\'lanish kodini olish',
@@ -99,6 +104,25 @@ export function igUnsupportedReply(attachmentType: string | null): string {
     default:
       return IG_UNSUPPORTED_ATTACHMENT;
   }
+}
+
+/**
+ * Meta reels uchun video faylini emas, sahifa havolasini yuborgan holat.
+ *
+ * Bu Meta tomonidagi cheklov: rasmiy API begona reels'ning faylini bermaydi
+ * (Graph API "missing permissions", CDN imzosiz 404). Shuning uchun
+ * foydalanuvchini ishlaydigan yo'lga — havolani Telegram botiga tashlashga —
+ * yo'naltiramiz.
+ */
+export function igReelNotDownloadable(botUsername: string): string {
+  const lines = [
+    '😕 Instagram bu reels\'ning video faylini bermadi.',
+    '',
+    'Buning o\'rniga reels\'ning HAVOLASINI nusxalab (Share → Copy link), ',
+    'Telegram botimizga tashlang — videoni ham, musiqa nomini ham yuboraman.',
+  ];
+  if (botUsername !== '') lines.push('', `👉 https://t.me/${botUsername}`);
+  return lines.join('\n');
 }
 
 export const IG_QUEUED =

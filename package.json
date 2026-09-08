@@ -15,7 +15,8 @@
     "worker": "node src/worker-standalone.ts",
     "worker:prod": "node dist/worker-standalone.js",
     "mock:text": "node src/dev/mock-cli.ts text",
-    "mock:reel": "node src/dev/mock-cli.ts reel"
+    "mock:reel": "node src/dev/mock-cli.ts reel",
+    "test:resolver": "node tests/ig-resolver.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

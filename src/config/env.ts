@@ -46,6 +46,28 @@ const envSchema = z.object({
     .default('https://graph.instagram.com/v23.0')
     .transform((v) => v.replace(/\/+$/, '')),
 
+  /**
+   * Instagram HAVOLASIDAN video faylini topib beruvchi tashqi xizmat.
+   *
+   * Meta rasmiy API orqali boshqa odamning reels faylini bermaydi, shuning
+   * uchun havola oqimi shu endpointga tayanadi. Bo'sh bo'lsa — havola qabul
+   * qilinadi, lekin foydalanuvchiga "hozircha yoqilmagan" deb javob beriladi.
+   *
+   * `{url}` shabloni haqiqiy havola bilan almashtiriladi; shablon bo'lmasa
+   * havola `?url=` parametri sifatida qo'shiladi.
+   */
+  IG_RESOLVER_URL: z.string().default(''),
+  IG_RESOLVER_METHOD: z
+    .string()
+    .default('GET')
+    .transform((v) => (v.trim().toUpperCase() === 'POST' ? 'POST' : 'GET')),
+  /** Qo'shimcha sarlavhalar, JSON obyekt: {"x-api-key":"..."} */
+  IG_RESOLVER_HEADERS: z.string().default(''),
+  /** Javobdagi video havolasining yo'li, masalan `data.media.0.url`. Bo'sh bo'lsa avtomatik qidiriladi. */
+  IG_RESOLVER_VIDEO_PATH: z.string().default(''),
+  IG_RESOLVER_TITLE_PATH: z.string().default(''),
+  IG_RESOLVER_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(120_000).default(45_000),
+
   // AudD.io
   AUDD_API_TOKEN: z.string().min(1),
 

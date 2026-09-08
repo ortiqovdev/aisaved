@@ -1,14 +1,19 @@
-import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile } from 'grammy';
+import { Bot, type Context, GrammyError, HttpError, InlineKeyboard, InputFile } from 'grammy';
 import type { Message } from 'grammy/types';
 import { getTrack } from '../services/deezer.ts';
 import { downloadMedia, safeUnlink } from '../services/media.ts';
+import {
+  isResolverConfigured,
+  parseInstagramLink,
+  type ParsedLink,
+} from '../services/ig-resolver.ts';
 import { PREVIEW_PREFIX } from './results.ts';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { errMessage } from '../lib/errors.ts';
 import * as usersRepo from '../db/users.repo.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
-import { TELEGRAM_MAX_DOWNLOAD_BYTES, TELEGRAM_SOURCE } from '../lib/constants.ts';
+import { IG_LINK_SOURCE, TELEGRAM_MAX_DOWNLOAD_BYTES, TELEGRAM_SOURCE } from '../lib/constants.ts';
 import {
   HELP_TEXT,
   IG_PROFILE_URL,
@@ -18,6 +23,17 @@ import {
 } from './messages.ts';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
+
+/**
+ * Bot username'i (`getMe` dan, ishga tushishda to'ldiriladi).
+ * Instagram javoblarida "t.me/..." havolasini yasash uchun kerak — uni
+ * `.env` ga qo'lda yozib qo'yish o'rniga Telegram'ning o'zidan olamiz.
+ */
+let botUsername = '';
+export const setBotUsername = (value: string): void => {
+  botUsername = value;
+};
+export const getBotUsername = (): string => botUsername;
 
 /** Instagram chatiga to'g'ridan-to'g'ri olib boradigan tugma. */
 const igKeyboard = (): InlineKeyboard =>
@@ -235,16 +251,90 @@ bot.on('message:photo', async (ctx) => {
   await ctx.reply('🖼 Bu rasm. Musiqani faqat video yoki audiodan aniqlay olaman.');
 });
 
+/**
+ * Instagram HAVOLASI yuborilgan holat.
+ *
+ * Meta rasmiy API orqali begona reels'ning faylini bermaydi, shuning uchun
+ * havoladan videoni tashqi resolver topadi ([services/ig-resolver.ts]).
+ * Undan keyin oqim media bilan bir xil: yuklash → audio parcha → AudD → Deezer.
+ */
+async function handleInstagramLink(ctx: Context, link: ParsedLink): Promise<void> {
+  const from = ctx.from;
+  const chat = ctx.chat;
+  const message = ctx.message;
+  if (!from || !chat || !message) return;
+
+  // Resolver ulanmagan bo'lsa navbatni behuda band qilmaymiz — darhol aytamiz
+  if (!isResolverConfigured()) {
+    await ctx.reply(
+      '⚙️ Havola orqali yuklash hozircha yoqilmagan.\n\n' +
+        'Videoni menga to\'g\'ridan-to\'g\'ri tashlang — musiqasini darhol aytaman.',
+    );
+    return;
+  }
+
+  const user = await usersRepo.getOrCreateByTelegramId({
+    telegramId: from.id,
+    username: from.username,
+    firstName: from.first_name,
+  });
+
+  const pending = await requestsRepo.pendingCountForUser(user.id);
+  if (pending >= env.MAX_PENDING_PER_USER) {
+    await ctx.reply(
+      `⏳ Sizning ${pending} ta so'rovingiz hali navbatda. ` +
+        'Ular tugagach yangisini yuboring — /status orqali holatni ko\'rishingiz mumkin.',
+    );
+    return;
+  }
+
+  const row = await requestsRepo.enqueue({
+    userId: user.id,
+    igMessageId: `tg:${chat.id}:${message.message_id}`,
+    mediaUrl: link.url,
+    mediaType: IG_LINK_SOURCE,
+    // Shortcode doimiy — ayni havola qayta yuborilsa natija keshdan olinadi
+    // va resolver ham, AudD ham bezovta qilinmaydi.
+    fileUniqueId: `ig:${link.shortcode}`,
+  });
+
+  if (!row) return; // dublikat
+
+  logger.info(
+    { requestId: row.id, telegramId: from.id, shortcode: link.shortcode, kind: link.kind },
+    'Instagram havolasi navbatga qo\'shildi',
+  );
+  await ctx.reply('⏳ Havola qabul qilindi — videoni olib, musiqasini aniqlayapman...');
+}
+
 // Boshqa har qanday matn
 bot.on('message:text', async (ctx) => {
-  if (ctx.message.text.startsWith('/')) {
+  const text = ctx.message.text;
+
+  if (text.startsWith('/')) {
     await ctx.reply('Bunday buyruq yo\'q. /help ni ko\'ring.');
     return;
   }
+
+  // Matn ichida Instagram havolasi bo'lsa — asosiy oqim
+  const link = parseInstagramLink(text);
+  if (link) {
+    await handleInstagramLink(ctx, link);
+    return;
+  }
+
   await ctx.reply(
-    `Reels'ni menga emas, Instagram'da <b>@${escapeHtml(env.IG_ACCOUNT_USERNAME)}</b> akkauntiga ` +
-      'yuboring 🙂\n\nHolatni ko\'rish: /status',
-    { parse_mode: 'HTML', reply_markup: igKeyboard() },
+    [
+      'Menga quyidagilardan birini yuboring 👇',
+      '',
+      '🔗 <b>Instagram havolasi</b> — reels yoki video post havolasini tashlang',
+      '🎬 <b>Video yoki audio</b> — to\'g\'ridan-to\'g\'ri shu yerga (20MB gacha)',
+      '',
+      `📸 Yoki Instagram'da <b>@${escapeHtml(env.IG_ACCOUNT_USERNAME)}</b> ga reels yuboring.`,
+      '',
+      'Yordam: /help · Holat: /status',
+    ].join('\n'),
+    { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, reply_markup: igKeyboard() },
   );
 });
 

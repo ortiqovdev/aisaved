@@ -11,10 +11,12 @@ import {
   trySendInstagramAction,
   trySendInstagramText,
   verifyWebhookSignature,
+  type ExtractedMedia,
   type IgMessagingEvent,
   type IgWebhookBody,
 } from '../services/instagram.ts';
 import { trySendText } from '../bot/notify.ts';
+import { getBotUsername } from '../bot/index.ts';
 import {
   IG_ALREADY_LINKED,
   IG_CODE_NOT_FOUND,
@@ -22,6 +24,7 @@ import {
   IG_NOT_LINKED_REPLY,
   IG_QUEUED,
   escapeHtml,
+  igReelNotDownloadable,
   igUnsupportedReply,
 } from '../bot/messages.ts';
 
@@ -105,10 +108,19 @@ async function handleEvent(event: IgMessagingEvent): Promise<void> {
   // "Ko'rildi" — foydalanuvchi xabari yetib borganini darhol biladi
   await trySendInstagramAction(senderId, 'mark_seen');
 
+  // VAQTINCHALIK DIAGNOSTIKA: Meta reels uchun qanday payload yuborayotganini
+  // ko'rish uchun. Media havolasi muammosi hal bo'lgach olib tashlanadi.
+  if ((message.attachments?.length ?? 0) > 0) {
+    logger.info(
+      { attachments: JSON.stringify(message.attachments) },
+      '🔍 Instagram attachment payload (diagnostika)',
+    );
+  }
+
   const media = extractVideoAttachment(event);
   if (media) {
     await trySendInstagramAction(senderId, 'typing_on');
-    await handleMedia(senderId, event, media.url, media.type);
+    await handleMedia(senderId, event, media);
     return;
   }
 
@@ -172,14 +184,34 @@ async function handleText(igScopedId: string, text: string): Promise<void> {
 async function handleMedia(
   igScopedId: string,
   event: IgMessagingEvent,
-  mediaUrl: string,
-  mediaType: string,
+  media: ExtractedMedia,
 ): Promise<void> {
   const user = await usersRepo.findByIgScopedId(igScopedId);
 
   if (!user || user.link_status !== 'linked') {
     logger.info({ igScopedId }, 'Bog\'lanmagan foydalanuvchidan media keldi');
     await trySendInstagramText(igScopedId, IG_NOT_LINKED_REPLY);
+    return;
+  }
+
+  /**
+   * Meta video fayl o'rniga reels SAHIFASINING havolasini yuborgan bo'lsa,
+   * jobni navbatga qo'ymaymiz: u muqarrar `text/html` xatosi bilan yiqiladi
+   * va foydalanuvchi "havola eskirgan" degan noto'g'ri sabab oladi.
+   * Buning o'rniga darhol ishlaydigan yo'lni ko'rsatamiz.
+   */
+  if (!media.downloadable) {
+    logger.info(
+      { igScopedId, type: media.type, url: media.url },
+      'Meta media fayli o\'rniga sahifa havolasini yubordi — navbatga qo\'yilmadi',
+    );
+    await trySendInstagramText(igScopedId, igReelNotDownloadable(getBotUsername()));
+    await trySendText(
+      user.telegram_id,
+      '😕 Instagram bu reels\'ning video faylini bermadi.\n\n' +
+        'Reels havolasini nusxalab (Share → Copy link) shu yerga tashlang — ' +
+        'videoni ham, musiqa nomini ham yuboraman.',
+    );
     return;
   }
 
@@ -197,13 +229,13 @@ async function handleMedia(
   const row = await requestsRepo.enqueue({
     userId: user.id,
     igMessageId: event.message?.mid ?? null,
-    mediaUrl,
-    mediaType,
+    mediaUrl: media.url,
+    mediaType: media.type,
   });
 
   if (!row) return; // dublikat webhook — javob ham takrorlanmasin
 
-  logger.info({ requestId: row.id, userId: user.id, mediaType }, 'Navbatga qo\'shildi');
+  logger.info({ requestId: row.id, userId: user.id, mediaType: media.type }, 'Navbatga qo\'shildi');
   await trySendInstagramText(igScopedId, IG_QUEUED);
   await trySendText(user.telegram_id, '⏳ Reels qabul qilindi, ishlov berilmoqda...');
 }

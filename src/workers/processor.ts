@@ -16,7 +16,8 @@ import {
 } from '../services/media.ts';
 import { identifySong, type SongInfo } from '../services/audd.ts';
 import { resolveTelegramFileUrl } from '../services/telegram-files.ts';
-import { TELEGRAM_SOURCE } from '../lib/constants.ts';
+import { resolveInstagramMedia } from '../services/ig-resolver.ts';
+import { IG_LINK_SOURCE, TELEGRAM_SOURCE } from '../lib/constants.ts';
 import { sendResult, sendSongOnly } from '../bot/notify.ts';
 
 /**
@@ -33,8 +34,12 @@ export async function processRequest(job: RequestRow): Promise<void> {
     throw new PermanentError(`user_id=${job.user_id} topilmadi`);
   }
 
-  // Media ikki manbadan kelishi mumkin: Instagram DM yoki to'g'ridan-to'g'ri Telegram
+  // Media uch manbadan kelishi mumkin:
+  //   telegram_file → foydalanuvchi faylni botga tashlagan (video unda bor)
+  //   ig_link       → Instagram havolasi (video resolver orqali topiladi)
+  //   ig_reel/...   → Instagram DM webhook'i (CDN havolasi payloadda keladi)
   const fromTelegram = job.media_type === TELEGRAM_SOURCE;
+  const fromLink = job.media_type === IG_LINK_SOURCE;
 
   /**
    * Natija allaqachon yuborilgan bo'lsa — ikkinchi marta yubormaymiz.
@@ -63,8 +68,11 @@ export async function processRequest(job: RequestRow): Promise<void> {
     // 0) Kesh: ayni fayl avval aniqlangan bo'lsa AudD'ni bezovta qilmaymiz.
     //    Instagram'da CDN URL har safar boshqacha bo'ladi, shuning uchun
     //    kesh faqat Telegram fayllari uchun ishlaydi (file_unique_id doimiy).
+    //    Havola oqimida kesh javobni TO'LIQ almashtira olmaydi: foydalanuvchi
+    //    videoni ham kutadi, shuning uchun u yerda kesh faqat AudD chaqiruvini
+    //    tejaydi (pastda `cached ?? identify...`).
     const cached = await lookupCache(job, log);
-    if (cached) {
+    if (cached && fromTelegram) {
       await withTelegramErrors(() => sendSongOnly(user.telegram_id, cached));
       await requestsRepo.markSent(job.id);
       await requestsRepo.markDone(job.id, {
@@ -81,16 +89,25 @@ export async function processRequest(job: RequestRow): Promise<void> {
     // 1) Manba havolasi.
     //    Instagram: webhookdagi CDN URL (~7 kun amal qiladi — darhol yuklaymiz)
     //    Telegram:  file_id -> vaqtinchalik URL (~1 soat)
-    const sourceUrl = fromTelegram
-      ? await resolveTelegramFileUrl(job.media_url)
-      : job.media_url;
+    let sourceUrl: string;
+    if (fromTelegram) {
+      sourceUrl = await resolveTelegramFileUrl(job.media_url);
+    } else if (fromLink) {
+      // Havolaning o'zi HTML sahifa — undan video faylini tashqi xizmat topadi
+      const resolved = await resolveInstagramMedia(job.media_url);
+      log.info({ title: resolved.title, author: resolved.author }, 'Havoladan video topildi');
+      sourceUrl = resolved.videoUrl;
+    } else {
+      sourceUrl = job.media_url;
+    }
 
     const downloaded = await downloadMedia(sourceUrl, job.id, { allowAudio: fromTelegram });
     videoPath = downloaded.filePath;
 
     // 2-3) Musiqa aniqlash. Bir necha parcha o'rnini sinab ko'radi —
     //      reels boshida ko'pincha gap yoki sukunat bo'ladi.
-    const song = await identifyWithFallback(videoPath, job, log, tempFiles);
+    //      Kesh bo'lsa AudD umuman chaqirilmaydi.
+    const song = cached ?? (await identifyWithFallback(videoPath, job, log, tempFiles));
 
     // 4) Javob.
     //    Telegram'dan kelgan bo'lsa videoni qaytarib yubormaymiz — u foydalanuvchida

@@ -158,25 +158,52 @@ export interface IgWebhookBody {
   }>;
 }
 
-/** Reels/video deb hisoblanadigan attachment turlari. */
-const VIDEO_ATTACHMENT_TYPES = new Set(['ig_reel', 'reel', 'video', 'share']);
+/**
+ * Media deb hisoblanadigan attachment turlari.
+ *
+ * `ig_post` ham shu ro'yxatda: Meta ulashilgan post uchun HAQIQIY CDN
+ * havolasini beradi (lookaside.fbsbx.com/...&signature=...) va u yuklab
+ * olinadi — ilgari bu tur ro'yxatda yo'q edi, shuning uchun bunday xabar
+ * jimgina tashlab yuborilar, foydalanuvchi esa umuman javob olmasdi.
+ */
+const VIDEO_ATTACHMENT_TYPES = new Set(['ig_reel', 'reel', 'video', 'share', 'ig_post']);
+
+/**
+ * Havola yuklab olinadigan MEDIA faylimi yoki shunchaki sahifa havolasimi?
+ *
+ * Meta `ig_reel` uchun ko'pincha video o'rniga reels SAHIFASINI yuboradi
+ * (`instagram.com/reel/XXX/`) — u `text/html` qaytaradi va undan video
+ * ajratib bo'lmaydi. Buni oldindan aniqlab, foydalanuvchiga haqiqiy sababni
+ * aytamiz; aks holda u "havola eskirgan" degan chalg'ituvchi xabar oladi.
+ */
+export function isDownloadableMediaUrl(url: string): boolean {
+  return !/^https?:\/\/(?:www\.)?instagram\.com\//i.test(url);
+}
 
 export interface ExtractedMedia {
   url: string;
   type: string;
+  /** false — bu sahifa havolasi, video fayl emas. */
+  downloadable: boolean;
 }
 
-/** Eventdan yuklab olinadigan video havolasini ajratadi (bo'lmasa null). */
+/** Eventdan media havolasini ajratadi (bo'lmasa null). */
 export function extractVideoAttachment(event: IgMessagingEvent): ExtractedMedia | null {
   const attachments = event.message?.attachments ?? [];
+
+  // Yuklab olinadigani ustunroq: bitta xabarda ham sahifa havolasi, ham CDN
+  // havolasi kelishi mumkin — bunda albatta CDN'nikini tanlaymiz.
+  let fallback: ExtractedMedia | null = null;
+
   for (const att of attachments) {
     const url = att.payload?.url;
-    if (!url) continue;
-    if (VIDEO_ATTACHMENT_TYPES.has(att.type)) {
-      return { url, type: att.type };
-    }
+    if (!url || !VIDEO_ATTACHMENT_TYPES.has(att.type)) continue;
+
+    const media: ExtractedMedia = { url, type: att.type, downloadable: isDownloadableMediaUrl(url) };
+    if (media.downloadable) return media;
+    fallback ??= media;
   }
-  return null;
+  return fallback;
 }
 
 /** Birinchi attachment turi — mos javob matnini tanlash uchun. */

@@ -4,7 +4,7 @@ import { logger } from './lib/logger.ts';
 import { errMessage } from './lib/errors.ts';
 import { assertDbReady } from './db/supabase.ts';
 import * as requestsRepo from './db/requests.repo.ts';
-import { bot, setupBotCommands } from './bot/index.ts';
+import { bot, setBotUsername, setupBotCommands } from './bot/index.ts';
 import { instagramWebhookRouter } from './webhook/instagram.ts';
 import { devMockRouter } from './webhook/dev-mock.ts';
 import { startWorkers, stopWorkers, workerStatus } from './workers/index.ts';
@@ -85,6 +85,7 @@ async function main(): Promise<void> {
   await cleanupTmpDir();
 
   const me = await bot.api.getMe();
+  setBotUsername(me.username);
   logger.info({ username: me.username }, 'Telegram bot ulandi');
   await setupBotCommands();
 
