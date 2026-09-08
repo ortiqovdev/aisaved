@@ -59,7 +59,28 @@ const envSchema = z.object({
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(500).default(3000),
   WORKER_STALE_LOCK_SECONDS: z.coerce.number().int().min(30).default(300),
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
-  MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(50 * 1024 * 1024),
+  /**
+   * Telegram sendVideo limiti aynan 50MB. Aynan 50MB fayl bizning
+   * tekshiruvdan o'tib, Telegram'da rad etiladi — shuning uchun default
+   * 48MB (xavfsizlik zaxirasi bilan).
+   */
+  MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(48 * 1024 * 1024),
+  /** Bitta foydalanuvchi navbatda ushlab turishi mumkin bo'lgan so'rovlar soni. */
+  MAX_PENDING_PER_USER: z.coerce.number().int().min(1).max(50).default(3),
+  /**
+   * AudD'ga yuboriladigan audio parchaning uzunligi (sekund).
+   * AudD hujjatlari 2–12 sekundni tavsiya qiladi; uzunroq parcha bilan
+   * "barmoq izi yasab bo'lmadi" (300) xatosi ko'proq uchraydi.
+   */
+  AUDD_SNIPPET_SECONDS: z.coerce.number().int().min(3).max(20).default(12),
+  /**
+   * Birinchi parchada musiqa topilmasa, videoning boshqa joyidan olib
+   * qayta urinish. Aniqlash sifatini sezilarli oshiradi, lekin AudD
+   * so'rovlarini ko'paytiradi (limit tor bo'lsa false qiling).
+   */
+  AUDD_MULTI_PASS: boolish(true),
+  /** Bir xil fayl qayta yuborilsa, avvalgi natijani qayta ishlatish. */
+  RESULT_CACHE_ENABLED: boolish(true),
   TMP_DIR: z
     .string()
     .optional()

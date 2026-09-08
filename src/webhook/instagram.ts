@@ -126,12 +126,14 @@ async function handleEvent(event: IgMessagingEvent): Promise<void> {
 /** Matnli xabar — bog'lash kodi bo'lishi mumkin. */
 async function handleText(igScopedId: string, text: string): Promise<void> {
   const code = usersRepo.normalizeLinkCode(text);
-  const linked = await usersRepo.findByIgScopedId(igScopedId);
+  const existing = await usersRepo.findByIgScopedId(igScopedId);
+  // Qator topilishining o'zi yetarli emas — holati ham 'linked' bo'lishi kerak
+  const isLinked = existing?.link_status === 'linked';
 
   if (!code) {
     await trySendInstagramText(
       igScopedId,
-      linked
+      isLinked
         ? '👋 Menga reels yuboring — videoni va musiqa nomini Telegram botingizga tashlayman.'
         : IG_NOT_LINKED_REPLY,
     );
@@ -140,7 +142,7 @@ async function handleText(igScopedId: string, text: string): Promise<void> {
 
   // Allaqachon bog'langan akkaunt kod yuborsa, "kod topilmadi" degan
   // chalkash javob bermaymiz.
-  if (linked && linked.link_status === 'linked') {
+  if (isLinked) {
     await trySendInstagramText(igScopedId, IG_ALREADY_LINKED);
     return;
   }
@@ -178,6 +180,17 @@ async function handleMedia(
   if (!user || user.link_status !== 'linked') {
     logger.info({ igScopedId }, 'Bog\'lanmagan foydalanuvchidan media keldi');
     await trySendInstagramText(igScopedId, IG_NOT_LINKED_REPLY);
+    return;
+  }
+
+  // Spam himoyasi — bitta akkaunt navbatni va AudD limitini yeb qo'ymasin
+  const pending = await requestsRepo.pendingCountForUser(user.id);
+  if (pending >= env.MAX_PENDING_PER_USER) {
+    logger.info({ userId: user.id, pending }, 'Foydalanuvchi navbat limitiga yetdi');
+    await trySendInstagramText(
+      igScopedId,
+      `⏳ Sizning ${pending} ta so'rovingiz hali navbatda. Ular tugagach yangisini yuboring.`,
+    );
     return;
   }
 

@@ -8,7 +8,7 @@ import { bot, setupBotCommands } from './bot/index.ts';
 import { instagramWebhookRouter } from './webhook/instagram.ts';
 import { devMockRouter } from './webhook/dev-mock.ts';
 import { startWorkers, stopWorkers, workerStatus } from './workers/index.ts';
-import { ensureTmpDir } from './services/media.ts';
+import { cleanupTmpDir, ensureTmpDir } from './services/media.ts';
 
 const app = express();
 
@@ -81,6 +81,8 @@ async function main(): Promise<void> {
 
   await assertDbReady();
   await ensureTmpDir();
+  // Jarayon avval job o'rtasida qulagan bo'lsa, tmp'da o'lik fayllar qoladi
+  await cleanupTmpDir();
 
   const me = await bot.api.getMe();
   logger.info({ username: me.username }, 'Telegram bot ulandi');

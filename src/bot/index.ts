@@ -133,6 +133,8 @@ bot.command('help', async (ctx) => {
 
 interface TelegramMedia {
   fileId: string;
+  /** Fayl mazmuniga bog'langan doimiy ID — kesh/dedup kaliti. */
+  fileUniqueId: string;
   fileSize: number | undefined;
   kind: string;
 }
@@ -140,9 +142,12 @@ interface TelegramMedia {
 /** Xabardan qayta ishlanadigan media faylni ajratadi. */
 function extractTelegramMedia(message: Message): TelegramMedia | null {
   const pick = (
-    file: { file_id: string; file_size?: number } | undefined,
+    file: { file_id: string; file_unique_id: string; file_size?: number } | undefined,
     kind: string,
-  ): TelegramMedia | null => (file ? { fileId: file.file_id, fileSize: file.file_size, kind } : null);
+  ): TelegramMedia | null =>
+    file
+      ? { fileId: file.file_id, fileUniqueId: file.file_unique_id, fileSize: file.file_size, kind }
+      : null;
 
   if (message.video) return pick(message.video, 'video');
   if (message.animation) return pick(message.animation, 'gif');
@@ -194,6 +199,17 @@ bot.on(
       firstName: from.first_name,
     });
 
+    // Spam himoyasi: bitta foydalanuvchi navbatni to'ldirib, AudD limitini
+    // (va boshqalarning navbatini) yeb qo'ymasligi uchun.
+    const pending = await requestsRepo.pendingCountForUser(user.id);
+    if (pending >= env.MAX_PENDING_PER_USER) {
+      await ctx.reply(
+        `⏳ Sizning ${pending} ta so'rovingiz hali navbatda. ` +
+          'Ular tugagach yangisini yuboring — /status orqali holatni ko\'rishingiz mumkin.',
+      );
+      return;
+    }
+
     const row = await requestsRepo.enqueue({
       userId: user.id,
       // Bir xil xabar ikki marta qayta ishlanmasligi uchun (unique constraint)
@@ -201,6 +217,7 @@ bot.on(
       // Bazada URL emas, file_id saqlanadi — URL ichida bot tokeni bo'ladi
       mediaUrl: media.fileId,
       mediaType: TELEGRAM_SOURCE,
+      fileUniqueId: media.fileUniqueId,
     });
 
     if (!row) return; // dublikat
@@ -246,6 +263,13 @@ bot.callbackQuery(new RegExp(`^${PREVIEW_PREFIX}:(\\d+)$`), async (ctx) => {
     return;
   }
 
+  // Inline rejimdagi xabarda chat bo'lmaydi — u holda yuborishga joy yo'q
+  const chatId = ctx.chat?.id;
+  if (chatId === undefined) {
+    await ctx.answerCallbackQuery({ text: 'Bu yerda yuborib bo\'lmaydi', show_alert: true });
+    return;
+  }
+
   await ctx.answerCallbackQuery({ text: '⏳ Yuborilmoqda...' });
 
   const track = await getTrack(id);
@@ -268,7 +292,7 @@ bot.callbackQuery(new RegExp(`^${PREVIEW_PREFIX}:(\\d+)$`), async (ctx) => {
 
   try {
     // Telegram preview'ni URL orqali o'zi olib beradi — bizga yuklash shart emas
-    await ctx.api.sendAudio(ctx.chat!.id, track.previewUrl, options);
+    await ctx.api.sendAudio(chatId, track.previewUrl, options);
   } catch (e) {
     // CDN Telegram'ga ruxsat bermasa — o'zimiz yuklab yuboramiz
     logger.debug({ err: errMessage(e) }, 'URL orqali audio ketmadi, yuklab ko\'ramiz');
@@ -276,7 +300,7 @@ bot.callbackQuery(new RegExp(`^${PREVIEW_PREFIX}:(\\d+)$`), async (ctx) => {
     try {
       const file = await downloadMedia(track.previewUrl, id, { allowAudio: true });
       tmp = file.filePath;
-      await ctx.api.sendAudio(ctx.chat!.id, new InputFile(tmp), options);
+      await ctx.api.sendAudio(chatId, new InputFile(tmp), options);
     } catch (e2) {
       logger.warn({ err: errMessage(e2) }, 'Preview yuborilmadi');
       await ctx.reply('😕 Parchani yuborib bo\'lmadi. Havola orqali tinglab ko\'ring.');

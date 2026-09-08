@@ -6,6 +6,7 @@ import { PermanentError, TransientError, backoffMs, errMessage, sleep } from '..
 import type { RequestRow } from '../db/types.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
 import * as usersRepo from '../db/users.repo.ts';
+import { TELEGRAM_SOURCE } from '../lib/constants.ts';
 import { trySendText } from '../bot/notify.ts';
 import { processRequest } from './processor.ts';
 
@@ -110,10 +111,15 @@ async function handleJobFailure(job: RequestRow, e: unknown): Promise<void> {
 }
 
 async function notifyUserOfFailure(job: RequestRow, e: unknown): Promise<void> {
-  const userMessage =
-    e instanceof PermanentError && e.userMessage
-      ? e.userMessage
+  // Umumiy xabar manbaga qarab farq qiladi: foydalanuvchi videoni botga
+  // o'zi tashlagan bo'lsa, "Instagram'da qaytadan yuboring" deyish chalkash.
+  const fallback =
+    job.media_type === TELEGRAM_SOURCE
+      ? '❌ Faylni qayta ishlashda xatolik yuz berdi. Iltimos, videoni qaytadan yuboring.'
       : '❌ Videoni qayta ishlashda xatolik yuz berdi. Iltimos, reels\'ni Instagram\'da qaytadan yuboring.';
+
+  const userMessage =
+    e instanceof PermanentError && e.userMessage ? e.userMessage : fallback;
 
   try {
     const user = await usersRepo.findById(job.user_id);

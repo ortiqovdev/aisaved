@@ -77,9 +77,24 @@ export async function identifySong(filePath: string): Promise<SongInfo | null> {
   if (json.status === 'error') {
     const code = json.error?.error_code;
     const msg = json.error?.error_message ?? 'noma\'lum xato';
-    // 901 = kunlik limit tugadi, 900 = noto'g'ri API token
-    if (code === 901) throw new TransientError(`AudD limiti tugadi: ${msg}`);
+
+    // 900 = noto'g'ri API token — retry qilish foydasiz
     if (code === 900) throw new PermanentError(`AudD tokeni yaroqsiz: ${msg}`);
+    // 901 = kunlik limit tugadi — keyinroq qayta urinish mumkin
+    if (code === 901) throw new TransientError(`AudD limiti tugadi: ${msg}`);
+
+    /**
+     * 300 = "Recognition failed: problem with creating an audio fingerprint".
+     *
+     * Bu SERVIS xatosi emas — shu parchadan barmoq izi olinmadi (sukunat,
+     * shovqin, faqat gap). Qayta urinish AYNI natijani beradi, shuning uchun
+     * "topilmadi" deb qaraymiz: chaqiruvchi boshqa parchani sinab ko'radi.
+     */
+    if (code === 300) {
+      logger.info({ filePath, code }, 'AudD: bu parchadan barmoq izi olinmadi');
+      return null;
+    }
+
     throw new TransientError(`AudD xatosi (${code}): ${msg}`);
   }
 

@@ -25,6 +25,10 @@ export interface RequestRow {
   locked_at: string | null;
   locked_by: string | null;
   video_file_path: string | null;
+  /** Natija foydalanuvchiga yuborilgan vaqt — takror yuborishni to'sadi. */
+  sent_at: string | null;
+  /** Telegram `file_unique_id` — bir xil faylni takror aniqlamaslik uchun. */
+  file_unique_id: string | null;
   song_title: string | null;
   song_artist: string | null;
   song_album: string | null;

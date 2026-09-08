@@ -72,12 +72,14 @@ Telegram botlarining yuklab olish limiti), bot musiqa nomini qaytaradi.
   Node **24** TypeScript'ni o'zi tushunadi, shuning uchun `tsx`/`ts-node` kerak emas —
   `npm run dev` to'g'ridan-to'g'ri `node --watch src/index.ts` ni ishga tushiradi.
 
-- **ffmpeg** (ixtiyoriy, lekin tavsiya etiladi — musiqa aniqlash tezlashadi va AudD limitini tejaydi):
+- **ffmpeg** — **o'rnatilgan** (v9.0, Gyan build). Musiqa aniqlash uchun **muhim**: videodan qisqa
+  audio parcha ajratadi, davomiyligini o'lchaydi va jim parchani AudD'ga yubormaydi.
   ```bash
   winget install Gyan.FFmpeg
   ```
-  Hozircha o'rnatilmagan — bu **muammo emas**: `extractAudioSnippet` null qaytaradi va video faylning
-  o'zi AudD'ga yuboriladi. Umuman o'chirish uchun `.env` da `USE_FFMPEG=false`.
+  Bo'lmasa ham ilova ishlaydi: `extractAudioSnippet` null qaytaradi va video faylning o'zi
+  AudD'ga yuboriladi — lekin sekinroq, qimmatroq va **aniqlash sifati pastroq** bo'ladi
+  (parchani videoning o'rtasidan olish imkoni yo'qoladi). Umuman o'chirish: `USE_FFMPEG=false`.
 
 - **ngrok** (lokal test uchun HTTPS webhook URL): https://ngrok.com/download
 
@@ -106,17 +108,23 @@ Manba kodida importlar `.ts` kengaytmasi bilan yozilgan (`allowImportingTsExtens
 
 1. https://supabase.com → **New project** yarating.
 2. **SQL Editor → New query** → [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql) faylining butun mazmunini qo'ying va **Run** bosing.
-3. **Project Settings → API** dan oling:
+3. **Xuddi shu joyda** [`supabase/migrations/0002_fixes.sql`](supabase/migrations/0002_fixes.sql) ni ham ishga tushiring.
+   Uni o'tkazib yuborsangiz ilova baribir ishlaydi, lekin ishga tushishda ogohlantirish beradi va
+   quyidagilar **o'chirilgan** bo'ladi: natija keshi, takror-yuborishdan himoya, tezroq `/health`.
+   Migratsiyalar idempotent — bir necha marta ishga tushirish xavfsiz.
+4. **Project Settings → API** dan oling:
    - `Project URL` → `.env` dagi `SUPABASE_URL`
    - `service_role` **secret** kalit → `SUPABASE_SERVICE_ROLE_KEY`
 
 > ⚠️ `service_role` kaliti RLS'ni chetlab o'tadi — uni faqat serverda saqlang, hech qachon frontendga yoki gitga qo'ymang (`.env` allaqachon `.gitignore` da).
 
-Migratsiya nima yaratadi:
+Migratsiyalar nima yaratadi:
 - `users` — telegram_id ↔ ig_scoped_id bog'lanishi, `link_code`, `link_status`
 - `requests` — har bir reels so'rovi **va ayni paytda navbat** (status, attempts, next_attempt_at, lock)
 - `claim_next_request()` — jobni atomik band qiluvchi SQL funksiya (bir nechta worker parallel ishlashi xavfsiz)
 - RLS yoqilgan, policy'siz → tashqaridan (anon kalit bilan) hech kim o'qiy olmaydi
+- `sent_at` — natija yuborilganini belgilaydi (ayni javob ikki marta ketmasligi uchun)
+- `file_unique_id` + `queue_stats()` + `user_pending_count()` — kesh, statistika, spam himoyasi
 
 ---
 
@@ -213,11 +221,11 @@ Bunda:
 Instagram'dan xabar kelganini taqlid qilish (server ishlab turganda, boshqa terminalda):
 
 ```bash
-node src/dev/mock-cli.ts text IGSID_TEST "LINK-AB12CD"
+npm run mock:text -- IGSID_TEST "LINK-AB12CD"
 ```
 
 ```bash
-node src/dev/mock-cli.ts reel IGSID_TEST
+npm run mock:reel -- IGSID_TEST
 ```
 
 Birinchisi — "Instagram'dan bog'lash kodi keldi", ikkinchisi — "reels yuborildi"
@@ -280,19 +288,52 @@ src/
   db/types.ts              → UserRow / RequestRow
   db/users.repo.ts         → link_code generatsiyasi, bog'lash/uzish
   db/requests.repo.ts      → navbat: enqueue / claimNext / markDone / requeue
-  bot/index.ts             → grammy: /start /status /unlink /help
+  lib/constants.ts         → aylanma importsiz umumiy konstantalar
+  bot/index.ts             → grammy: /start /status /unlink /help + media qabul qilish
   bot/messages.ts          → barcha matnlar (HTML escape bilan)
   bot/notify.ts            → videoni caption bilan yuborish
+  bot/results.ts           → natija xabari: versiyalar, muqova, inline tugmalar
   webhook/instagram.ts     → GET verify + POST receive (imzo tekshiruvi bilan)
+  webhook/dev-mock.ts      → MOCK_INSTAGRAM=true da webhook taqlidi
   services/instagram.ts    → DM yuborish, webhook imzosi, payload parsing
   services/audd.ts         → musiqa aniqlash
-  services/media.ts        → video yuklash, ffmpeg audio parcha, tozalash
+  services/deezer.ts       → versiyalar, muqova, 30s rasmiy preview (kalitsiz API)
+  services/telegram-files.ts → file_id → vaqtinchalik yuklash URL'i
+  services/media.ts        → yuklash, ffmpeg parcha, davomiylik, jimlik, tozalash
   workers/index.ts         → polling loop, retry qarorlari
   workers/processor.ts     → bitta jobning to'liq bajarilishi
+  dev/mock-cli.ts          → terminaldan mock xabar yuborish
   index.ts                 → server + bot + worker
   worker-standalone.ts     → faqat worker (alohida masshtablash uchun)
 supabase/migrations/0001_init.sql
+supabase/migrations/0002_fixes.sql
 ```
+
+---
+
+## Musiqa aniqlash sifati
+
+Reels'ning ilk sekundlari ko'pincha gap, intro yoki sukunat bo'ladi. Faqat 0-sekunddan
+parcha olish shu sababli ko'p hollarda hech narsa topmaydi. Shuning uchun:
+
+1. `ffmpeg` bilan video **davomiyligi** o'lchanadi;
+2. parcha **avval o'rtadan**, keyin boshidan, keyin oxiridan olinadi (`AUDD_MULTI_PASS`);
+3. har parchaning **eng baland nuqtasi** tekshiriladi — jim parcha AudD'ga umuman
+   yuborilmaydi (limit tejaladi);
+4. birinchi topilgan natija qaytariladi.
+
+O'lchangan haqiqiy qiymatlar (chegara nima uchun -60 dB): tanilgan qo'shiq `max -35.7 dB`,
+shovqin `max -26.0 dB`, raqamli sukunat `max -91.0 dB`.
+
+| Sozlama | Vazifasi |
+|---|---|
+| `AUDD_SNIPPET_SECONDS` | Parcha uzunligi. AudD 2–12s tavsiya qiladi; default **12** |
+| `AUDD_MULTI_PASS` | Topilmasa boshqa joydan urinish. AudD so'rovlarini ko'paytiradi |
+| `RESULT_CACHE_ENABLED` | Ayni fayl qayta kelsa avvalgi natijani ishlatish |
+| `MAX_PENDING_PER_USER` | Bitta foydalanuvchi navbatdagi so'rovlari chegarasi |
+
+> `AUDD_SNIPPET_SECONDS` ni 12 dan oshirmang — uzunroq parchada AudD
+> "barmoq izi yasab bo'lmadi" (xato **300**) qaytarishi ko'payadi.
 
 ---
 
@@ -301,9 +342,13 @@ supabase/migrations/0001_init.sql
 | Holat | Xatti-harakat |
 |---|---|
 | Media URL muddati o'tgan (403/410) | Retry qilinmaydi → userga "reels'ni qaytadan yuboring" |
-| Video > 50MB | Retry qilinmaydi → userga hajm haqida xabar |
-| AudD 429 / limit tugagan | Retry (eksponensial backoff, `MAX_ATTEMPTS` gacha) |
+| Video > `MAX_VIDEO_BYTES` (default 48MB) | Retry qilinmaydi → userga hajm haqida xabar |
+| AudD 429 / limit tugagan (901) | Retry (eksponensial backoff, `MAX_ATTEMPTS` gacha) |
+| AudD tokeni yaroqsiz (900) | Retry qilinmaydi → `failed` |
+| AudD barmoq izi yasay olmadi (300) | **Xato emas** — shu parchada musiqa yo'q, keyingi parcha sinaladi |
 | Musiqa topilmadi | **Xato emas** — video baribir yuboriladi, "musiqa aniqlanmadi" deb yoziladi |
+| Natija yuborilgan, lekin baza yozilmagan | `sent_at` tufayli qayta olinganda IKKINCHI marta yuborilmaydi |
+| Foydalanuvchi navbatni to'ldirdi | `MAX_PENDING_PER_USER` dan oshsa yangi so'rov qabul qilinmaydi |
 | Telegram 429 (flood) | `retry_after` ga qarab kechiktiriladi |
 | User botni bloklagan (403) | Retry qilinmaydi → `failed` |
 | Worker qulab tushdi | Job `WORKER_STALE_LOCK_SECONDS` dan keyin avtomatik qayta olinadi |
@@ -318,7 +363,8 @@ Retry orasidagi kutish: `15s → 30s → 60s ...` (jitter bilan, maksimum 15 daq
 - **Media URL ~7 kun amal qiladi** — shuning uchun job kelishi bilanoq yuklab olinadi.
 - **24 soatlik oyna:** Meta qoidasiga ko'ra foydalanuvchi yozgandan keyin 24 soat ichida javob berish mumkin. Biz webhook kelgan zahoti javob berganimiz uchun bu shart bajariladi.
 - **Rate limit:** Meta Messaging — soatiga ~200 chaqiruv/user. Har bir reels uchun biz atigi 1-2 ta DM yuboramiz, shuning uchun oddiy foydalanishda limitga yetilmaydi; 429 kelsa job kechiktiriladi.
-- **Telegram bot API** orqali maksimum **50MB** fayl yuborish mumkin (`MAX_VIDEO_BYTES`).
+- **Telegram bot API** orqali maksimum **50MB** fayl yuborish mumkin. `MAX_VIDEO_BYTES` default
+  **48MB** — aynan 50MB'lik fayl bizning tekshiruvdan o'tib Telegram'da rad etilmasligi uchun zaxira.
 - **App Review:** boshqa (test bo'lmagan) foydalanuvchilarning DM'lari kelishi uchun Meta App Review'dan `instagram_business_manage_messages` ruxsatini olish kerak. Ishlab chiqishda faqat app'ga qo'shilgan test foydalanuvchilar/rollar ishlaydi.
 
 ---

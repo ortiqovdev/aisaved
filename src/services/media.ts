@@ -13,6 +13,40 @@ export async function ensureTmpDir(): Promise<string> {
   return env.TMP_DIR;
 }
 
+/**
+ * TMP_DIR dagi eskirgan fayllarni o'chiradi.
+ *
+ * Jarayon job o'rtasida qulab tushsa, `finally` bloki ishlamaydi va
+ * vaqtinchalik video diskda qolib ketadi. Uzoq ishlaydigan serverda bu
+ * diskni to'ldiradi — shuning uchun ishga tushishda tozalab olamiz.
+ */
+export async function cleanupTmpDir(maxAgeMs = 6 * 60 * 60_000): Promise<number> {
+  let entries: string[];
+  try {
+    entries = await fsp.readdir(env.TMP_DIR);
+  } catch {
+    return 0;
+  }
+
+  const cutoff = Date.now() - maxAgeMs;
+  let removed = 0;
+  for (const name of entries) {
+    const full = path.join(env.TMP_DIR, name);
+    try {
+      const stat = await fsp.stat(full);
+      if (!stat.isFile() || stat.mtimeMs > cutoff) continue;
+      await fsp.unlink(full);
+      removed += 1;
+    } catch {
+      // boshqa jarayon ishlatayotgan bo'lishi mumkin — e'tiborsiz qoldiramiz
+    }
+  }
+  if (removed > 0) {
+    logger.info({ removed, dir: env.TMP_DIR }, 'Eskirgan vaqtinchalik fayllar tozalandi');
+  }
+  return removed;
+}
+
 export interface DownloadedFile {
   filePath: string;
   bytes: number;
@@ -166,21 +200,118 @@ function extensionFor(contentType: string | null): string {
 }
 
 /**
- * ffmpeg bo'lsa videodan qisqa audio parcha ajratadi (mp3, 12s).
+ * Media davomiyligini (sekund) aniqlaydi.
+ *
+ * ffprobe alohida dastur va har doim mavjud bo'lmasligi mumkin, shuning uchun
+ * ffmpeg'ning o'zidan foydalanamiz: kirish faylini ochganda "Duration: ..."
+ * satrini stderr'ga chiqaradi. null — aniqlab bo'lmadi.
+ */
+export async function probeDurationSeconds(filePath: string): Promise<number | null> {
+  if (!env.USE_FFMPEG) return null;
+  try {
+    // Chiqish fayli berilmagani uchun ffmpeg xato kodi bilan tugaydi —
+    // bizga faqat metadata satri kerak, shuning uchun allowFailure.
+    const { stderr } = await runCommand(
+      env.FFMPEG_PATH,
+      ['-hide_banner', '-i', filePath],
+      20_000,
+      { allowFailure: true },
+    );
+    const m = /Duration:\s*(\d+):(\d{2}):(\d{2})\.(\d+)/.exec(stderr);
+    if (!m) return null;
+    const total =
+      Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(`0.${m[4]}`);
+    return Number.isFinite(total) && total > 0 ? total : null;
+  } catch (e) {
+    logger.debug({ err: errMessage(e) }, 'Davomiylikni aniqlab bo\'lmadi');
+    return null;
+  }
+}
+
+/**
+ * Musiqa aniqlash uchun eng istiqbolli parcha o'rinlarini tanlaydi (sekundda).
+ *
+ * Nega kerak: reels'ning ilk sekundlari ko'pincha gap, logo yoki sukunat
+ * bo'ladi — 0-sekunddan olingan parcha bilan AudD hech narsa topmaydi,
+ * holbuki qo'shiq 5-10 sekunddan boshlanadi. Shuning uchun avval O'RTADAN
+ * (eng ehtimolli joydan), keyin boshidan olib ko'ramiz.
+ */
+export function snippetOffsets(durationSeconds: number | null, snippetLen: number): number[] {
+  // Davomiylik noma'lum yoki video parchadan qisqa — bitta urinish yetarli
+  if (durationSeconds === null || durationSeconds <= snippetLen + 2) return [0];
+
+  const offsets: number[] = [];
+  const mid = Math.floor(durationSeconds / 2 - snippetLen / 2);
+  if (mid > 1) offsets.push(mid);
+  offsets.push(0);
+
+  // Oxirgi qism: musiqa videoning ikkinchi yarmida boshlanadigan holatlar
+  // (boshida uzoq gap yoki intro bo'lgan reels) uchun.
+  const late = Math.max(0, Math.floor(durationSeconds - snippetLen - 1));
+  if (late > mid + 2) offsets.push(late);
+
+  return offsets;
+}
+
+/**
+ * Parchaning ENG BALAND nuqtasini (dBFS) qaytaradi. null — aniqlanmadi.
+ *
+ * Nega kerak: toza sukunatdan AudD barmoq izi yasay olmaydi va 300 xatosini
+ * qaytaradi — so'rov behuda ketadi (limit sarflanadi, javob sekinlashadi).
+ *
+ * Nega `mean_volume` emas, `max_volume`: o'rtacha qiymat aldaydi. O'lchangan
+ * haqiqiy misollar:
+ *   - tanilgan qo'shiq (AudD namunasi): mean -48.8 dB, max -35.7 dB
+ *   - shovqin:                          mean -30.8 dB, max -26.0 dB
+ *   - raqamli sukunat:                  mean -91.0 dB, max -91.0 dB
+ * Ya'ni jim yozilgan musiqaning o'rtachasi sukunatga juda yaqin bo'ladi —
+ * o'rtacha bo'yicha filtrlash haqiqiy musiqani rad etib qo'yardi. Eng baland
+ * nuqta esa sukunatni (-91) har qanday real ovozdan ishonchli ajratadi.
+ */
+export async function measureLoudnessDb(filePath: string): Promise<number | null> {
+  if (!env.USE_FFMPEG) return null;
+  try {
+    const { stderr } = await runCommand(
+      env.FFMPEG_PATH,
+      ['-hide_banner', '-i', filePath, '-af', 'volumedetect', '-f', 'null', '-'],
+      30_000,
+      { allowFailure: true },
+    );
+    const m = /max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/.exec(stderr);
+    if (!m?.[1]) return null;
+    const db = Number(m[1]);
+    return Number.isFinite(db) ? db : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Bundan jim parcha AudD'ga yuborilmaydi.
+ *
+ * Raqamli sukunat -91 dB, eng jim haqiqiy musiqa ham -36 dB atrofida —
+ * -60 dB ikkisining orasida keng zaxira qoldiradi, ya'ni haqiqiy ovozni
+ * xato rad etish xavfi yo'q.
+ */
+export const SILENCE_THRESHOLD_DB = -60;
+
+/**
+ * ffmpeg bo'lsa videodan qisqa audio parcha ajratadi (mp3).
  * Musiqa aniqlash uchun butun video kerak emas — bu ancha tez va arzon.
  * ffmpeg topilmasa null qaytaradi, chaqiruvchi videoning o'zini yuboradi.
  */
 export async function extractAudioSnippet(
   videoPath: string,
   startSeconds = 0,
-  durationSeconds = 12,
+  durationSeconds = env.AUDD_SNIPPET_SECONDS,
 ): Promise<string | null> {
   if (!env.USE_FFMPEG) return null;
 
-  // Har qanday kengaytmani (.mp4/.mov/.webm) olib tashlaymiz
+  // Har qanday kengaytmani (.mp4/.mov/.webm) olib tashlaymiz.
+  // Offset nomga kiritiladi — ketma-ket parchalar bir-birini yozib ketmasin.
   const audioPath = path.join(
     path.dirname(videoPath),
-    `${path.basename(videoPath, path.extname(videoPath))}-snippet.mp3`,
+    `${path.basename(videoPath, path.extname(videoPath))}-s${startSeconds}.mp3`,
   );
   const args = [
     '-hide_banner',
@@ -200,7 +331,7 @@ export async function extractAudioSnippet(
     await runCommand(env.FFMPEG_PATH, args, 60_000);
   } catch (e) {
     logger.warn(
-      { err: errMessage(e) },
+      { err: errMessage(e), startSeconds },
       'ffmpeg ishlamadi — video faylning o\'zi musiqa aniqlashga yuboriladi',
     );
     await safeUnlink(audioPath);
@@ -209,7 +340,9 @@ export async function extractAudioSnippet(
 
   try {
     const stat = await fsp.stat(audioPath);
-    if (stat.size < 1024) {
+    // Juda kichik fayl = ovoz yo'q yoki offset video oxiridan tashqarida
+    if (stat.size < 4096) {
+      logger.debug({ audioPath, bytes: stat.size, startSeconds }, 'Parcha bo\'sh — o\'tkazildi');
       await safeUnlink(audioPath);
       return null;
     }
@@ -220,26 +353,49 @@ export async function extractAudioSnippet(
   return audioPath;
 }
 
-function runCommand(cmd: string, args: string[], timeoutMs: number): Promise<void> {
+interface RunOptions {
+  /** true bo'lsa nolga teng bo'lmagan exit kod xato hisoblanmaydi (probe uchun). */
+  allowFailure?: boolean;
+}
+
+function runCommand(
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+  options: RunOptions = {},
+): Promise<{ stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { windowsHide: true });
     let stderr = '';
+    // `error` va `close` ikkisi ham chiqishi mumkin — promise bir marta hal bo'ladi
+    let settled = false;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error(`${cmd} ${timeoutMs}ms ichida tugamadi`));
+      settle(() => reject(new Error(`${cmd} ${timeoutMs}ms ichida tugamadi`)));
     }, timeoutMs);
 
     child.stderr.on('data', (d: Buffer) => {
-      stderr += d.toString();
+      // Cheklov: buzilgan fayl megabaytlab log chiqarishi mumkin
+      if (stderr.length < 64_000) stderr += d.toString();
     });
     child.on('error', (err) => {
       clearTimeout(timer);
-      reject(err);
+      settle(() => reject(err));
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error(`${cmd} kod ${code} bilan tugadi: ${stderr.slice(0, 300)}`));
+      if (code === 0 || options.allowFailure) settle(() => resolve({ stderr }));
+      else {
+        settle(() =>
+          reject(new Error(`${cmd} kod ${code} bilan tugadi: ${stderr.slice(0, 300)}`)),
+        );
+      }
     });
   });
 }

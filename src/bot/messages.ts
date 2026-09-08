@@ -65,8 +65,6 @@ export const HELP_TEXT = [
   '/help — shu yordam',
 ].join('\n');
 
-export const NOT_LINKED_HINT =
-  '❗️ Siz hali bog\'lanmagansiz. /start bosing va Instagram\'ga kodni yuboring.';
 
 export const IG_NOT_LINKED_REPLY =
   '❗️ Siz hali Telegram botiga bog\'lanmagansiz.\n\n' +

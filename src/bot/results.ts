@@ -69,6 +69,21 @@ export interface SongMessage {
   coverUrl: string | null;
 }
 
+/**
+ * Telegram limiti: rasm caption'i 1024 belgi (oddiy xabar 4096).
+ * Natija muqova bilan yuborilgani uchun caption'ga sig'ishi kerak —
+ * aks holda sendPhoto 400 qaytaradi va muqovasiz matnga tushib qolamiz.
+ */
+const CAPTION_LIMIT = 1024;
+/** Bitta nom/ijrochi/albom uchun maksimal uzunlik. */
+const FIELD_LIMIT = 120;
+
+/** Xom matnni (escape qilishdan oldin) qisqartiradi. */
+function clip(value: string, limit = FIELD_LIMIT): string {
+  const v = value.trim();
+  return v.length <= limit ? v : `${v.slice(0, limit - 1)}…`;
+}
+
 const NUMBER_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
 
 function formatDuration(sec: number): string {
@@ -99,21 +114,31 @@ export async function buildSongMessage(song: SongInfo | null): Promise<SongMessa
   const found = await searchTracks(buildQuery(song.artist, song.title), SEARCH_LIMIT);
   const versions = pickVersions(found, song);
 
-  const lines = [
-    `🎵 <b>${escapeHtml(song.title)}</b>`,
-    `👤 ${escapeHtml(song.artist)}`,
+  // HTML tegi o'rtasidan kesish Telegram'da "can't parse entities" beradi,
+  // shuning uchun XOM matnni escape qilishdan OLDIN qisqartiramiz.
+  const header = [
+    `🎵 <b>${escapeHtml(clip(song.title))}</b>`,
+    `👤 ${escapeHtml(clip(song.artist))}`,
   ];
-  if (song.album) lines.push(`💿 ${escapeHtml(song.album)}`);
+  if (song.album) header.push(`💿 ${escapeHtml(clip(song.album))}`);
 
+  const lines = [...header];
   if (versions.length > 0) {
     lines.push('', '<b>Versiyalar</b> — tinglash uchun raqamni bosing:');
     versions.forEach((t, i) => {
       const num = NUMBER_EMOJI[i] ?? `${i + 1}.`;
-      const album = t.album ? ` · <i>${escapeHtml(t.album)}</i>` : '';
+      const album = t.album ? ` · <i>${escapeHtml(clip(t.album))}</i>` : '';
       lines.push(
-        `${num} ${escapeHtml(t.artist)} — ${escapeHtml(t.title)}${album} <b>${formatDuration(t.durationSec)}</b>`,
+        `${num} ${escapeHtml(clip(t.artist))} — ${escapeHtml(clip(t.title))}${album} <b>${formatDuration(t.durationSec)}</b>`,
       );
     });
+  }
+
+  // Uzun nomlar bilan 5 ta versiya caption limitidan oshib ketishi mumkin.
+  // Bunday holda oxirgi versiya SATRLARINI olib tashlaymiz (butun satr —
+  // teglar muvozanati buzilmaydi). Tugmalar baribir joyida qoladi.
+  while (lines.join('\n').length > CAPTION_LIMIT && lines.length > header.length) {
+    lines.pop();
   }
 
   return {

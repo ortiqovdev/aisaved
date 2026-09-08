@@ -10,12 +10,13 @@
 import { logger } from './lib/logger.ts';
 import { errMessage } from './lib/errors.ts';
 import { assertDbReady } from './db/supabase.ts';
-import { ensureTmpDir } from './services/media.ts';
+import { cleanupTmpDir, ensureTmpDir } from './services/media.ts';
 import { startWorkers, stopWorkers } from './workers/index.ts';
 
 async function main(): Promise<void> {
   await assertDbReady();
   await ensureTmpDir();
+  await cleanupTmpDir();
   startWorkers();
 
   const shutdown = (signal: string): void => {
