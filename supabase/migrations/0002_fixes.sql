@@ -73,7 +73,11 @@ begin
 end;
 $$;
 
-revoke all on function public.claim_next_request(text, int) from anon, authenticated;
+-- DIQQAT: `revoke ... from anon, authenticated` YETARLI EMAS. Postgres funksiyaga
+-- EXECUTE ruxsatini sukut boyicha PUBLIC ga beradi, anon/authenticated esa uni
+-- aynan PUBLIC orqali oladi. PUBLIC dan olib tashlamasak, bu security definer
+-- funksiyani publishable (anon) kalit bilan istalgan odam chaqira olardi.
+revoke all on function public.claim_next_request(text, int) from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------
 -- 4) queue_stats — /health uchun 4 ta alohida COUNT so'rovi o'rniga bitta.
@@ -89,7 +93,7 @@ as $$
    group by r.status;
 $$;
 
-revoke all on function public.queue_stats() from anon, authenticated;
+revoke all on function public.queue_stats() from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------
 -- 5) user_pending_count — bitta foydalanuvchining navbatdagi joblari soni
@@ -107,4 +111,4 @@ as $$
      and r.status in ('queued', 'processing');
 $$;
 
-revoke all on function public.user_pending_count(bigint) from anon, authenticated;
+revoke all on function public.user_pending_count(bigint) from public, anon, authenticated;
