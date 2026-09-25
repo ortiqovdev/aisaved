@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AI Saved brand assets</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@500;800&display=swap" rel="stylesheet">
+<style>
+  :root { --ink: #0B0B0B; --paper: #FFFFFF; --accent: #C6FF3D; }
+  body { margin: 0; padding: 32px; background: #1a1a1a; color: #ddd; font: 14px Inter, sans-serif; }
+  h2 { font-weight: 800; margin: 32px 0 12px; }
+  canvas { display: block; max-width: 100%; height: auto; border-radius: 8px; }
+  .row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .round { border-radius: 50%; }
+  .small canvas { width: 40px; height: 40px; }
+</style>
+</head>
+<body>
+<!--
+  Brendning yagona manbasi. Belgi (bookmark + nota) quyidagi yo'llardan chiziladi;
+  PNG fayllar shu sahifadagi canvas'lardan eksport qilingan (branding/*.png).
+-->
+<h2>Avatar 1024 (Telegram)</h2>
+<div class="row">
+  <canvas id="avatar" width="1024" height="1024" style="width:320px"></canvas>
+  <canvas id="avatarRound" class="round" width="1024" height="1024" style="width:320px"></canvas>
+  <div class="small row"><canvas id="avatarSmall" class="round" width="1024" height="1024"></canvas></div>
+</div>
+<h2>Avatar 1080 (Instagram)</h2>
+<canvas id="avatarIg" class="round" width="1080" height="1080" style="width:320px"></canvas>
+<h2>Lime variant: lime fon, oq bookmark, nota lime</h2>
+<div class="row">
+  <canvas id="avatarLime" class="round" width="1080" height="1080" style="width:320px"></canvas>
+  <div class="small row"><canvas id="avatarLimeSmall" class="round" width="1024" height="1024"></canvas></div>
+</div>
+<h2>Lime variant (solishtirish uchun): lime fon, qora bookmark</h2>
+<div class="row">
+  <canvas id="avatarLimeInk" class="round" width="1080" height="1080" style="width:320px"></canvas>
+  <div class="small row"><canvas id="avatarLimeInkSmall" class="round" width="1024" height="1024"></canvas></div>
+</div>
+<h2>Status karta 1280×720 ("qabul qilindi" — keyin natijaga aylanadi)</h2>
+<canvas id="status" width="1280" height="720" style="width:640px"></canvas>
+<h2>Description picture 640×360</h2>
+<canvas id="cover" width="640" height="360" style="width:640px"></canvas>
+<h2>Light variant (posts)</h2>
+<canvas id="light" width="1080" height="1080" style="width:320px"></canvas>
+
+<script>
+// Urg'u — Signal Lime. Bot tugmalarida unga eng yaqini Telegram'ning "success" (yashil) uslubi
+const INK = '#0B0B0B', PAPER = '#FFFFFF', ACCENT = '#C6FF3D';
+
+// Belgi 440×560 koordinatalarda (bookmark kengligi × balandligi)
+const MARK_W = 440, MARK_H = 560;
+const BOOKMARK = 'M48 0 H392 A48 48 0 0 1 440 48 V560 L220 440 L0 560 V48 A48 48 0 0 1 48 0 Z';
+const STEM = 'M208 104 H240 V332 H208 Z';
+const FLAG = 'M236 104 H240 C240 104 250 148 300 172 C342 192 354 236 336 284 C328 244 296 222 240 214 H236 Z';
+const HEAD = { cx: 180, cy: 340, rx: 66, ry: 50, rot: -22 * Math.PI / 180 };
+
+/** Belgini (x,y) ga, `h` balandlikda chizadi. */
+function drawMark(ctx, x, y, h, fg, cut) {
+  const s = h / MARK_H;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  ctx.fillStyle = fg;
+  ctx.fill(new Path2D(BOOKMARK));
+  ctx.fillStyle = cut;
+  ctx.fill(new Path2D(STEM));
+  ctx.fill(new Path2D(FLAG));
+  ctx.beginPath();
+  ctx.ellipse(HEAD.cx, HEAD.cy, HEAD.rx, HEAD.ry, HEAD.rot, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function avatar(id, bg, fg) {
+  const c = document.getElementById(id), ctx = c.getContext('2d');
+  const S = c.width;
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, S, S);
+  const h = S * 0.52;                 // doira kesimida ~15% xavfsiz chet qoladi
+  const w = h * MARK_W / MARK_H;
+  // Optik markaz: bookmark pastidagi o'yiq uni "yengil" qiladi — biroz pastga suramiz
+  drawMark(ctx, (S - w) / 2, (S - h) / 2 + S * 0.02, h, fg, bg);
+}
+
+function cover() {
+  const c = document.getElementById('cover'), ctx = c.getContext('2d');
+  const W = c.width, H = c.height;
+  ctx.fillStyle = INK; ctx.fillRect(0, 0, W, H);
+
+  // Chap: belgi
+  drawMark(ctx, 56, 78, 204, ACCENT, INK);
+
+  // O'ng: sarlavha — ikki qator, qisqa
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = '400 92px Anton';
+  ctx.fillStyle = PAPER;
+  ctx.fillText('HEAR IT.', 268, 170);
+  ctx.fillStyle = ACCENT;
+  ctx.fillText('SAVE IT.', 268, 268);
+
+  ctx.font = '500 17px Inter';
+  ctx.fillStyle = 'rgba(255,255,255,0.72)';
+  ctx.fillText('Send a Reel — get the song.', 270, 306);
+}
+
+/** "Qabul qilindi" kartasi: belgi + uchta nuqta (jarayon ketmoqda). Matn caption'da. */
+function statusCard() {
+  const c = document.getElementById('status'), ctx = c.getContext('2d');
+  const W = c.width, H = c.height;
+  ctx.fillStyle = INK; ctx.fillRect(0, 0, W, H);
+  const h = 300, w = h * MARK_W / MARK_H;
+  drawMark(ctx, (W - w) / 2, 150, h, ACCENT, INK);
+  const y = 540, r = 11, gap = 44;
+  [0.35, 0.65, 1].forEach((alpha, i) => {
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = ACCENT;
+    ctx.beginPath();
+    ctx.arc(W / 2 + (i - 1) * gap, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+function light() {
+  const c = document.getElementById('light'), ctx = c.getContext('2d');
+  const S = c.width;
+  ctx.fillStyle = PAPER; ctx.fillRect(0, 0, S, S);
+  const h = S * 0.5, w = h * MARK_W / MARK_H;
+  // Oq fonda faqat qora: urg'u rangi faqat qora fonda (qoida)
+  drawMark(ctx, (S - w) / 2, (S - h) / 2 + S * 0.02, h, INK, PAPER);
+}
+
+// Shakllar shriftga bog'liq emas — darhol chiziladi
+avatar('avatar', INK, ACCENT);
+avatar('avatarRound', INK, ACCENT);
+avatar('avatarSmall', INK, ACCENT);
+avatar('avatarIg', INK, ACCENT);
+// Muqobil: lime fon — nota fon rangida "kesiladi"
+avatar('avatarLime', ACCENT, PAPER);
+avatar('avatarLimeSmall', ACCENT, PAPER);
+avatar('avatarLimeInk', ACCENT, INK);
+avatar('avatarLimeInkSmall', ACCENT, INK);
+statusCard();
+light();
+// Sarlavhali rasm — shriftlar yuklangach
+Promise.all([
+  document.fonts.load('400 92px Anton'),
+  document.fonts.load('500 17px Inter'),
+]).then(() => {
+  cover();
+  window.__ready = true;
+});
+
+/**
+ * Eksport rejimi: `source.html#avatar` — faqat shu canvas, 1:1, chetsiz.
+ * PNG'lar shunday olinadi (headless brauzer skrinshoti):
+ *   msedge --headless --screenshot=avatar.png --window-size=1024,1024 "file:///.../source.html#avatar"
+ */
+const only = location.hash.slice(1);
+if (only) {
+  document.body.style.cssText = 'margin:0;padding:0;background:#000;overflow:hidden';
+  const c = document.getElementById(only);
+  document.body.replaceChildren(c);
+  c.className = '';
+  c.style.cssText = `display:block;width:${c.width}px;height:${c.height}px;border-radius:0`;
+}
+</script>
+</body>
+</html>

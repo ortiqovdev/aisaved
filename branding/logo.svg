@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 560" width="440" height="560">
+  <!-- AI Saved belgisi: bookmark (saved) + bo'sh joy bilan kesilgan nota (music).
+       Rang: `fill` ni o'zgartiring — qora fonda #C6FF3D, oq fonda #0B0B0B. -->
+  <defs>
+    <mask id="note-cut">
+      <rect width="440" height="560" fill="#fff"/>
+      <path d="M208 104 H240 V332 H208 Z" fill="#000"/>
+      <path d="M236 104 H240 C240 104 250 148 300 172 C342 192 354 236 336 284 C328 244 296 222 240 214 H236 Z" fill="#000"/>
+      <ellipse cx="180" cy="340" rx="66" ry="50" transform="rotate(-22 180 340)" fill="#000"/>
+    </mask>
+  </defs>
+  <path d="M48 0 H392 A48 48 0 0 1 440 48 V560 L220 440 L0 560 V48 A48 48 0 0 1 48 0 Z"
+        fill="#C6FF3D" mask="url(#note-cut)"/>
+</svg>
