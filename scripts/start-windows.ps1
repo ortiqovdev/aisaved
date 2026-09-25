@@ -70,7 +70,7 @@ $portLine = Select-String -Path '.env' -Pattern '^\s*PORT\s*=\s*(\d+)' | Select-
 if ($portLine) { $port = [int]$portLine.Matches[0].Groups[1].Value }
 
 Remove-Item 'tunnel.log', 'tunnel.out.log' -ErrorAction SilentlyContinue
-$tunnel = Start-Process -FilePath $cf -ArgumentList @('tunnel', '--no-autoupdate', '--url', "http://localhost:$port") `
+$tunnel = Start-Process -FilePath $cf -ArgumentList @('tunnel', '--no-autoupdate', '--url', "http://127.0.0.1:$port") `
   -RedirectStandardError 'tunnel.log' -RedirectStandardOutput 'tunnel.out.log' -WindowStyle Hidden -PassThru
 
 $url = $null
