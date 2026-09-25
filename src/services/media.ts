@@ -106,6 +106,45 @@ export function isImageContentType(contentType: string | null): boolean {
   return (contentType?.split(';')[0]?.trim().toLowerCase() ?? '').startsWith('image/');
 }
 
+/** Telegram faylni URL orqali o'zi oladigan hajm chegaralari. */
+const URL_SEND_LIMIT = { photo: 5 * 1024 * 1024, video: 20 * 1024 * 1024 } as const;
+
+/**
+ * Havoladagi fayl turini YUKLAB OLMASDAN aniqlaydi (HEAD yoki 1 baytlik GET).
+ *
+ * Instagram DM rasmlari/postlari turi noma'lum holda keladi — shu sababli
+ * ular Telegram'ga URL orqali emas, serverga yuklab olib qayta yuklanardi
+ * (11–28 s). Turi aniq bo'lsa Telegram faylni CDN'dan o'zi oladi (~2–4 s).
+ *
+ * @returns 'photo' | 'video' — URL orqali yuborish mumkin; null — turi
+ *   noma'lum, hajmi Telegram limitidan katta yoki so'rov ishlamadi
+ */
+export async function probeUrlKind(url: string, timeoutMs = 4_000): Promise<'photo' | 'video' | null> {
+  const attempt = async (init: RequestInit): Promise<Response | null> => {
+    try {
+      const res = await fetchWithTimeout(url, { redirect: 'follow', ...init }, timeoutMs);
+      void res.body?.cancel().catch(() => undefined); // tanasi kerak emas
+      return res.ok ? res : null;
+    } catch {
+      return null;
+    }
+  };
+  // Ba'zi CDN'lar HEAD'ni qo'llamaydi — unda Range bilan 1 bayt so'raymiz
+  const res =
+    (await attempt({ method: 'HEAD' })) ?? (await attempt({ headers: { Range: 'bytes=0-0' } }));
+  if (!res) return null;
+
+  const type = res.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? '';
+  const kind = type.startsWith('image/') ? 'photo' : type.startsWith('video/') ? 'video' : null;
+  if (!kind) return null;
+
+  // To'liq hajm: HEAD'da content-length, Range'da content-range ".../<jami>"
+  const total =
+    Number(res.headers.get('content-range')?.split('/')[1]) ||
+    (res.status === 200 ? Number(res.headers.get('content-length')) : 0);
+  return total > URL_SEND_LIMIT[kind] ? null : kind;
+}
+
 export async function downloadMedia(
   url: string,
   requestId: number,
@@ -427,12 +466,15 @@ export interface VideoNoteFile {
  * 640×640 ga keltiriladi va 60 soniyadan keyingi qism tashlanadi.
  * Ovoz ixtiyoriy (`0:a:0?`) — ovozsiz GIF/video ham ishlaydi.
  *
+ * @param knownDuration — Telegram bergan davomiylik (sekund). Berilsa ffprobe
+ *   chaqirilmaydi: har bir probe ~0.2 s, ikkitasi — sezilarli kechikish.
  * @throws Error — ffmpeg o'chirilgan yoki o'girib bo'lmadi
  */
-export async function makeVideoNote(inputPath: string): Promise<VideoNoteFile> {
+export async function makeVideoNote(inputPath: string, knownDuration?: number): Promise<VideoNoteFile> {
   if (!env.USE_FFMPEG) throw new Error('USE_FFMPEG=false — video note yasab bo\'lmaydi');
 
-  const sourceDuration = await probeDurationSeconds(inputPath);
+  const known = knownDuration !== undefined && knownDuration > 0;
+  const sourceDuration = known ? knownDuration : await probeDurationSeconds(inputPath);
   const trimmed = sourceDuration !== null && sourceDuration > VIDEO_NOTE_MAX_SECONDS;
 
   const outPath = path.join(
@@ -468,7 +510,8 @@ export async function makeVideoNote(inputPath: string): Promise<VideoNoteFile> {
     throw e;
   }
 
-  const outDuration = await probeDurationSeconds(outPath);
+  // Natija = min(asl, 60) — asl davomiylik ma'lum bo'lsa qayta o'lchash shart emas
+  const outDuration = known ? null : await probeDurationSeconds(outPath);
   const duration = Math.max(
     1,
     Math.round(outDuration ?? Math.min(sourceDuration ?? 1, VIDEO_NOTE_MAX_SECONDS)),

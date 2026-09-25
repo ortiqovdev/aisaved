@@ -224,22 +224,6 @@ export async function sendSongOnly(
     ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } }
     : {};
 
-  if (message.coverUrl) {
-    try {
-      await bot.api.sendPhoto(telegramId, message.coverUrl, {
-        caption: message.text,
-        parse_mode: 'HTML',
-        ...reply,
-        ...(message.keyboard ? { reply_markup: message.keyboard } : {}),
-      });
-      logger.info({ telegramId, song: song?.title ?? null }, 'Musiqa natijasi yuborildi (muqova bilan)');
-      return;
-    } catch (e) {
-      // Muqova URL'i ishlamasa — matnli variantga tushamiz
-      logger.debug({ err: errMessage(e) }, 'Muqova yuborilmadi, matn bilan davom etamiz');
-    }
-  }
-
   await bot.api.sendMessage(telegramId, message.text, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },

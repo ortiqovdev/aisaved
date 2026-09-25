@@ -12,6 +12,7 @@ import {
   extractAudioSnippet,
   measureLoudnessDb,
   probeDurationSeconds,
+  probeUrlKind,
   safeUnlink,
   snippetOffsets,
 } from '../services/media.ts';
@@ -26,6 +27,7 @@ import {
 import { resolveTelegramFileUrl } from '../services/telegram-files.ts';
 import type { MediaKind } from '../services/ig-resolver.ts';
 import { formatMusic, resolvePost, type MusicTag, type ResolvedPost } from '../services/resolvers.ts';
+import { prepareNow, takePrepared, type Prepared } from '../services/prepare.ts';
 import { platformOfMediaType } from '../services/links.ts';
 import {
   IG_REACTION,
@@ -123,18 +125,22 @@ export async function processRequest(job: RequestRow): Promise<void> {
     }
     forgetStatusCard(job.id);
 
-    // 4) Yuborildi + tugadi — bitta so'rov bilan
-    await requestsRepo.markDelivered(job.id, {
-      song_title: song?.title ?? null,
-      song_artist: song?.artist ?? null,
-      song_album: song?.album ?? null,
-      song_link: song?.link ?? null,
-    });
+    // 4) Instagram'dan kelgan bo'lsa — reelsga ✅ (⌛ o'rniga) va bazada
+    //    "yuborildi + tugadi" — ikkalasi birga: ✅ bazani kutib qolmasin
+    await Promise.all([
+      reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.ok),
+      requestsRepo.markDelivered(job.id, {
+        song_title: song?.title ?? null,
+        song_artist: song?.artist ?? null,
+        song_album: song?.album ?? null,
+        song_link: song?.link ?? null,
+      }),
+    ]);
 
-    log.info({ song: song?.title ?? null }, 'Job muvaffaqiyatli yakunlandi');
-
-    // 7) Instagram'dan kelgan bo'lsa — reelsga ✅ (u yerda matn yozilmaydi)
-    await reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.ok);
+    log.info(
+      { song: song?.title ?? null, totalMs: Date.now() - new Date(job.created_at).getTime() },
+      'Job muvaffaqiyatli yakunlandi',
+    );
   } finally {
     // Vaqtinchalik fayllar har qanday holatda tozalanadi
     for (const f of tempFiles) await safeUnlink(f);
@@ -191,32 +197,59 @@ async function deliverPost(
   const platform = platformOfMediaType(job.media_type);
   const replyTo = telegramMessageIdOf(job.ig_message_id);
 
-  // 1) Kesh
-  if (key) {
+  // Bot/webhook havolani ko'rishi bilan fonda boshlagan tayyorlash (kesh +
+  // resolver) — bo'lsa o'shani olamiz, bo'lmasa (alohida worker, qayta urinish)
+  // hozir hisoblaymiz. [services/prepare.ts]
+  const t0 = Date.now();
+  let prepared: Prepared | null = null;
+  if (platform) {
+    prepared = await ((key ? takePrepared(key) : null) ?? prepareNow(key, platform, job.media_url, job.id));
+  } else if (key) {
     const cached = await getMediaCache(key);
-    if (cached) {
-      try {
-        const items: OutMedia[] = cached.map((c) => ({ kind: c.kind, source: { fileId: c.fileId } }));
-        await deliverMedia(chatId, items, lang, await statusCardOf(job.id), {
-          replyTo,
-          music: cached[0]?.music,
-        });
-        log.info({ key }, 'Post keshdan yuborildi (resolver chaqirilmadi)');
-        return;
-      } catch (e) {
-        if (!canFallBack(e)) throw toJobError(e);
-        log.warn({ key, err: errMessage(e) }, 'Keshdagi file_id ishlamadi — kesh tozalanadi');
-        await dropMediaCache(key);
-      }
+    if (cached) prepared = { cached };
+  }
+
+  // 1) Kesh — Telegram file_id orqali bir zumda
+  if (prepared && 'cached' in prepared) {
+    const cached = prepared.cached;
+    try {
+      const items: OutMedia[] = cached.map((c) => ({ kind: c.kind, source: { fileId: c.fileId } }));
+      await deliverMedia(chatId, items, lang, await statusCardOf(job.id), {
+        replyTo,
+        music: cached[0]?.music,
+      });
+      log.info({ key, ms: Date.now() - t0 }, 'Post keshdan yuborildi (resolver chaqirilmadi)');
+      return;
+    } catch (e) {
+      if (!canFallBack(e)) throw toJobError(e);
+      log.warn({ key, err: errMessage(e) }, 'Keshdagi file_id ishlamadi — kesh tozalanadi');
+      await dropMediaCache(key!);
+      prepared = platform ? { post: await resolvePost(platform, job.media_url, job.id) } : null;
     }
   }
 
-  let post: ResolvedPost = { items: [{ url: job.media_url, kind: kindOfJob(job.media_type) }] };
+  let post: ResolvedPost =
+    prepared && 'post' in prepared
+      ? prepared.post
+      : { items: [{ url: job.media_url, kind: kindOfJob(job.media_type) }] };
+
+  // Turi noma'lum fayllar (Instagram DM rasmlari/postlari) — turini sarlavhadan
+  // bilib olamiz: shunda ular ham URL orqali ketadi, yuklab-qayta yuklanmaydi
+  if (!post.downloaded?.length && post.items.some((i) => i.kind === null)) {
+    const tp = Date.now();
+    const kinds = await Promise.all(post.items.map((i) => i.kind ?? probeUrlKind(i.url)));
+    post = { ...post, items: post.items.map((i, n) => ({ ...i, kind: kinds[n] ?? null })) };
+    log.info({ kinds, probeMs: Date.now() - tp }, 'Fayl turlari aniqlandi');
+  }
+  tempFiles.push(...(post.downloaded ?? []).map((f) => f.filePath));
   if (platform) {
-    post = await resolvePost(platform, job.media_url, job.id);
-    tempFiles.push(...(post.downloaded ?? []).map((f) => f.filePath));
     log.info(
-      { platform, files: post.items.length + (post.downloaded?.length ?? 0), music: post.music },
+      {
+        platform,
+        files: post.items.length + (post.downloaded?.length ?? 0),
+        music: post.music,
+        resolveMs: Date.now() - t0,
+      },
       'Havoladan post topildi',
     );
   }
@@ -254,18 +287,24 @@ async function deliverPost(
     );
   }
 
+  log.info({ key, ms: Date.now() - t0 }, 'Post yuborildi');
+
+  // Keshlar — fonda: foydalanuvchi videoni allaqachon oldi, bazaga yozishni
+  // (~0.5 s har biri) kutib worker'ni ham, ✅ reaksiyani ham ushlab turmaymiz.
+  // Ikkala funksiya xatoni o'zi ushlaydi va logga yozadi.
+  const writes: Array<Promise<void>> = [];
   if (key && delivered.length > 0) {
     const [first, ...rest] = delivered;
-    await putMediaCache(key, first ? [{ ...first, music: formatMusic(post.music) }, ...rest] : rest);
+    writes.push(putMediaCache(key, first ? [{ ...first, music: formatMusic(post.music) }, ...rest] : rest));
   }
-
   // Platforma qo'shiqni aytgan bo'lsa — video ostidagi 🎵 uchun tayyor javob:
   // bosilganda Shazam ham chaqirilmaydi (kalit — yuborilgan videoning file_unique_id)
   if (post.music && env.RESULT_CACHE_ENABLED) {
     for (const d of delivered) {
-      if (d.kind === 'video' && d.fileUniqueId) await putSongCache(d.fileUniqueId, songOfTag(post.music));
+      if (d.kind === 'video' && d.fileUniqueId) writes.push(putSongCache(d.fileUniqueId, songOfTag(post.music)));
     }
   }
+  void Promise.all(writes);
 }
 
 /** Platforma aytgan qo'shiq → natija (havolalar va muqovani Deezer qidiruvi topadi). */
@@ -291,19 +330,26 @@ async function downloadItems(
   job: RequestRow,
   log: Logger,
 ): Promise<DownloadedFile[]> {
+  // Karusel fayllari PARALLEL yuklanadi (tartib saqlanadi) — ketma-ket
+  // yuklaganda 10 ta rasm 10 barobar ko'p vaqt olardi
+  const results = await Promise.allSettled(
+    urls.map((url) => downloadMedia(url, job.id, { allowImage: true })),
+  );
   const files: DownloadedFile[] = [];
   let firstError: unknown = null;
-  for (const url of urls) {
-    try {
-      files.push(await downloadMedia(url, job.id, { allowImage: true }));
-    } catch (e) {
-      if (urls.length === 1 || !(e instanceof PermanentError)) {
-        for (const f of files) await safeUnlink(f.filePath);
-        throw e;
-      }
-      firstError ??= e;
-      log.warn({ err: errMessage(e) }, 'Karusel fayli yuklanmadi — qolganlari yuboriladi');
+  let fatal: unknown = null;
+  for (const r of results) {
+    if (r.status === 'fulfilled') {
+      files.push(r.value);
+      continue;
     }
+    firstError ??= r.reason;
+    if (urls.length === 1 || !(r.reason instanceof PermanentError)) fatal ??= r.reason;
+    else log.warn({ err: errMessage(r.reason) }, 'Karusel fayli yuklanmadi — qolganlari yuboriladi');
+  }
+  if (fatal !== null) {
+    for (const f of files) await safeUnlink(f.filePath);
+    throw fatal;
   }
   if (files.length === 0) throw firstError;
   return files;

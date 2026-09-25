@@ -10,7 +10,22 @@ import {
   parseMediaLink,
   type MediaLink,
 } from '../services/links.ts';
-import { PREVIEW_PREFIX } from './results.ts';
+import {
+  PREVIEW_PREFIX,
+  YT_AUDIO_DL_PREFIX,
+  TOP_DL_PREFIX,
+  buildSearchResultsMessage,
+  buildTopChartsMessage,
+} from './results.ts';
+import {
+  searchYouTube,
+  downloadYouTubeAudio,
+  getTopCharts,
+  getTrackMetadata,
+  getCachedAudioFileId,
+  saveAudioFileIdToCache,
+  type TrendingTrack,
+} from '../services/youtube.ts';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { errMessage } from '../lib/errors.ts';
@@ -41,6 +56,7 @@ import { deliverMedia, type OutMedia } from './notify.ts';
 import { dropMediaCache, peekMediaCache } from '../db/media-cache.repo.ts';
 import type { EnqueueInput } from '../db/requests.repo.ts';
 import { wakeWorkers } from '../workers/wake.ts';
+import { startPreparing } from '../services/prepare.ts';
 import {
   ROUND_ACTION,
   SONG_ACTION,
@@ -121,7 +137,7 @@ bot.command('start', async (ctx) => {
   });
 
   if (user.link_status === 'linked') {
-    await ctx.reply(alreadyLinked(ctx.lang, user.ig_scoped_id), { parse_mode: 'HTML' });
+    await ctx.reply(alreadyLinked(ctx.lang), { parse_mode: 'HTML' });
     return;
   }
 
@@ -215,6 +231,33 @@ bot.on('inline_query', handleInlineQuery);
 
 bot.command('help', async (ctx) => {
   await ctx.reply(helpText(ctx.lang), { parse_mode: 'HTML' });
+});
+
+// ---------------------------------------------------------------------------
+// /top — Trenddagi Top 10 qo'shiqlar
+// ---------------------------------------------------------------------------
+
+let cachedTopTracks: TrendingTrack[] = [];
+let cachedTopAt = 0;
+
+bot.command('top', async (ctx) => {
+  await ctx.replyWithChatAction('typing');
+  const now = Date.now();
+  if (cachedTopTracks.length === 0 || now - cachedTopAt > 10 * 60_000) {
+    cachedTopTracks = await getTopCharts(10);
+    cachedTopAt = now;
+  }
+
+  if (cachedTopTracks.length === 0) {
+    await ctx.reply('❌ Hozircha trend qo\'shiqlarni olib bo\'lmadi.');
+    return;
+  }
+
+  const res = buildTopChartsMessage(cachedTopTracks, ctx.lang);
+  await ctx.reply(res.text, {
+    parse_mode: 'HTML',
+    reply_markup: res.keyboard,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -345,17 +388,29 @@ async function queueWithCard(
   const chat = ctx.chat;
   if (!from || !chat) return null;
 
-  const statusId = await openStatusCard(ctx, key);
-  const userId = await usersRepo.userIdFor({
-    telegramId: from.id,
-    username: from.username,
-    firstName: from.first_name,
-    language: ctx.lang,
-  });
+  // Loading xabari va navbatga yozish — PARALLEL (ikkalasi ham tarmoq so'rovi,
+  // ketma-ket qilsak foydalanuvchi ~0.3 s ortiqcha kutardi). Xabar ID'si
+  // navbatga keyin yoziladi: worker uni ish oxirida o'qiydi.
+  // Spam himoyasi (limit) shu yerda: bitta foydalanuvchi navbatni to'ldirib
+  // limitlarni (va boshqalarning navbatini) yeb qo'ymasin.
+  const enqueue = usersRepo
+    .userIdFor({
+      telegramId: from.id,
+      username: from.username,
+      firstName: from.first_name,
+      language: ctx.lang,
+    })
+    .then((userId) => requestsRepo.enqueueWithLimit({ ...job, userId }));
 
-  // Spam himoyasi: bitta foydalanuvchi navbatni to'ldirib, limitlarni
-  // (va boshqalarning navbatini) yeb qo'ymasligi uchun.
-  const result = await requestsRepo.enqueueWithLimit({ ...job, userId, statusMessageId: statusId });
+  const [statusResult, enqueueResult] = await Promise.allSettled([openStatusCard(ctx, key), enqueue]);
+  const statusId = statusResult.status === 'fulfilled' ? statusResult.value : null;
+  if (enqueueResult.status === 'rejected') {
+    // Loading "osilib" qolmasin — xato matniga almashtiramiz
+    if (statusId) await setStatusCardText(chat.id, statusId, ctx.t('unexpectedError'));
+    throw enqueueResult.reason;
+  }
+  const result = enqueueResult.value;
+
   if (result.status === 'limit') {
     const text = ctx.t('pendingLimit', { n: result.pending });
     if (statusId) await setStatusCardText(chat.id, statusId, text);
@@ -367,7 +422,13 @@ async function queueWithCard(
     return null;
   }
 
-  if (statusId) rememberStatusCard(result.row.id, statusId);
+  if (statusId) {
+    rememberStatusCard(result.row.id, statusId);
+    // Bazaga ham (alohida worker jarayoni / qayta ishga tushish uchun) — fonda
+    void requestsRepo.setStatusMessageId(result.row.id, statusId).catch((e: unknown) =>
+      logger.debug({ err: errMessage(e) }, 'status_message_id saqlanmadi (xotirada bor)'),
+    );
+  }
   wakeWorkers();
   return result.row.id;
 }
@@ -425,6 +486,10 @@ async function handleMediaLink(ctx: BotContext, link: MediaLink): Promise<void> 
     }
   }
 
+  // Kesh va resolver fonda HOZIROQ boshlanadi — navbatga yozish va worker
+  // band qilishi (bazaga ~1 s) bilan parallel; worker natijani tayyor oladi
+  startPreparing(link.key, link.platform, link.url);
+
   const requestId = await queueWithCard(ctx, 'linkQueued', {
     igMessageId: `tg:${chat.id}:${message.message_id}`,
     mediaUrl: link.url,
@@ -442,7 +507,7 @@ async function handleMediaLink(ctx: BotContext, link: MediaLink): Promise<void> 
 
 // Boshqa har qanday matn
 bot.on('message:text', async (ctx) => {
-  const text = ctx.message.text;
+  const text = ctx.message.text.trim();
   const isPrivate = ctx.chat.type === 'private';
 
   // Matn ichida qo'llab-quvvatlanadigan havola bo'lsa — asosiy oqim
@@ -458,6 +523,20 @@ bot.on('message:text', async (ctx) => {
   if (text.startsWith('/')) {
     await ctx.reply(ctx.t('unknownCommand'));
     return;
+  }
+
+  // Qo'shiq nomi qidiruvi (@SongFastBot kabi)
+  if (text.length >= 2) {
+    await ctx.replyWithChatAction('typing');
+    const tracks = await searchYouTube(text, 5);
+    if (tracks.length > 0) {
+      const res = buildSearchResultsMessage(text, tracks, ctx.lang);
+      await ctx.reply(res.text, {
+        parse_mode: 'HTML',
+        reply_markup: res.keyboard,
+      });
+      return;
+    }
   }
 
   await ctx.reply(ctx.t('textMenu', { account: igAccount() }), {
@@ -491,64 +570,100 @@ bot.on('my_chat_member', async (ctx) => {
 });
 
 // ---------------------------------------------------------------------------
-// Inline tugma: tanlangan versiyaning 30 soniyalik RASMIY preview'i
-//
-// Bu — platformalar tinglatish uchun ochiq beradigan qisqa parcha.
-// To'liq tijoriy trek yuklanmaydi va tarqatilmaydi; to'liq qo'shiq uchun
-// xabardagi Spotify / Apple Music / Deezer havolalari bor.
+// ---------------------------------------------------------------------------
+// To'liq musiqani yuklab Telegram'ga yuborish funksiyasi
 // ---------------------------------------------------------------------------
 
-bot.callbackQuery(new RegExp(`^${PREVIEW_PREFIX}:(\\d+)$`), async (ctx) => {
-  const id = Number(ctx.match?.[1]);
-  if (!Number.isFinite(id)) {
-    await ctx.answerCallbackQuery({ text: ctx.t('invalidChoice'), show_alert: true });
-    return;
+async function sendDownloadedAudio(
+  chatId: number,
+  videoId: string,
+  ctx: BotContext,
+): Promise<void> {
+  // 1) Keshdan tekshiramiz — bir zumda yuborish
+  const cachedFileId = await getCachedAudioFileId(videoId);
+  if (cachedFileId) {
+    try {
+      await ctx.api.sendAudio(chatId, cachedFileId, {
+        caption: `🎵 @${getBotInfo().username ?? 'bot'} orqali yuklab olindi`,
+      });
+      return;
+    } catch (e) {
+      logger.warn({ videoId, err: errMessage(e) }, 'Keshdagi audio file_id ishlamadi');
+    }
   }
 
-  // Inline rejimdagi xabarda chat bo'lmaydi — u holda yuborishga joy yo'q
+  // 2) Keshda yo'q — yt-dlp orqali yuklab olamiz
+  const meta = getTrackMetadata(videoId);
+  const title = meta?.title ?? 'Musiqa';
+  const artist = meta?.artist ?? 'YouTube';
+  const duration = meta?.durationSec ?? 0;
+
+  let cleanup: (() => Promise<void>) | null = null;
+  try {
+    await ctx.replyWithChatAction('upload_voice');
+    const dl = await downloadYouTubeAudio(videoId);
+    cleanup = dl.cleanup;
+
+    const sent = await ctx.api.sendAudio(chatId, new InputFile(dl.filePath), {
+      title,
+      performer: artist,
+      duration: duration > 0 ? duration : undefined,
+      caption: `🎵 <b>${escapeHtml(title)}</b>\n👤 ${escapeHtml(artist)}\n\n@${getBotInfo().username ?? 'bot'} orqali yuklab olindi`,
+      parse_mode: 'HTML',
+    });
+
+    if (sent.audio?.file_id) {
+      await saveAudioFileIdToCache(videoId, sent.audio.file_id);
+    }
+  } catch (e) {
+    logger.error({ videoId, err: errMessage(e) }, 'Audio yuklab yuborishda xatolik');
+    await ctx.reply('❌ Musiqani yuklab olishda xatolik yuz berdi. Qaytadan urinib ko\'ring.');
+  } finally {
+    if (cleanup) await cleanup();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inline tugmalar: 1..5 musiqani yuklab olish
+// ---------------------------------------------------------------------------
+
+bot.callbackQuery(new RegExp(`^${YT_AUDIO_DL_PREFIX}:([a-zA-Z0-9_-]{11})$`), async (ctx) => {
+  const videoId = ctx.match?.[1];
+  if (!videoId) return;
+
   const chatId = ctx.chat?.id;
-  if (chatId === undefined) {
+  if (!chatId) {
     await ctx.answerCallbackQuery({ text: ctx.t('cantSendHere'), show_alert: true });
     return;
   }
 
-  await ctx.answerCallbackQuery({ text: ctx.t('sending') });
+  await ctx.answerCallbackQuery({ text: '⏳ Musiqa yuklanmoqda...' });
+  await sendDownloadedAudio(chatId, videoId, ctx);
+});
 
-  const track = await getTrack(id);
-  if (!track?.previewUrl) {
-    await ctx.reply(ctx.t('previewNotFound'));
+// /top trendlar ro'yxatidan tanlanganda:
+bot.callbackQuery(new RegExp(`^${TOP_DL_PREFIX}:(\\d+)$`), async (ctx) => {
+  const idx = Number(ctx.match?.[1]);
+  const track = cachedTopTracks[idx];
+  if (!track) {
+    await ctx.answerCallbackQuery({ text: ctx.t('invalidChoice'), show_alert: true });
     return;
   }
 
-  const options = {
-    caption: ctx.t('previewCaption', {
-      title: escapeHtml(track.title),
-      artist: escapeHtml(track.artist),
-    }),
-    parse_mode: 'HTML' as const,
-    title: track.title,
-    performer: track.artist,
-    duration: 30,
-  };
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
 
-  try {
-    // Telegram preview'ni URL orqali o'zi olib beradi — bizga yuklash shart emas
-    await ctx.api.sendAudio(chatId, track.previewUrl, options);
-  } catch (e) {
-    // CDN Telegram'ga ruxsat bermasa — o'zimiz yuklab yuboramiz
-    logger.debug({ err: errMessage(e) }, 'URL orqali audio ketmadi, yuklab ko\'ramiz');
-    let tmp: string | null = null;
-    try {
-      const file = await downloadMedia(track.previewUrl, id, { allowAudio: true });
-      tmp = file.filePath;
-      await ctx.api.sendAudio(chatId, new InputFile(tmp), options);
-    } catch (e2) {
-      logger.warn({ err: errMessage(e2) }, 'Preview yuborilmadi');
-      await ctx.reply(ctx.t('previewFailed'));
-    } finally {
-      await safeUnlink(tmp);
-    }
+  await ctx.answerCallbackQuery({ text: `⏳ "${track.title}" yuklanmoqda...` });
+
+  const query = `${track.artist} ${track.title}`;
+  const ytTracks = await searchYouTube(query, 1);
+  const best = ytTracks[0];
+  if (!best) {
+    await ctx.reply('❌ Kechirasiz, bu qo\'shiqning audio fayli topilmadi.');
+    return;
   }
+
+  await sendDownloadedAudio(chatId, best.id, ctx);
 });
 
 // ---------------------------------------------------------------------------
@@ -578,6 +693,7 @@ bot.catch(async (err) => {
 export async function setupBotCommands(): Promise<void> {
   const commandsFor = (lang: Lang) => [
     { command: 'start', description: t(lang, 'cmdStart') },
+    { command: 'top', description: t(lang, 'cmdTop') },
     { command: 'round', description: t(lang, 'cmdRound') },
     { command: 'status', description: t(lang, 'cmdStatus') },
     { command: 'language', description: t(lang, 'cmdLanguage') },

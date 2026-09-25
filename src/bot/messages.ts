@@ -29,9 +29,9 @@ export function linkInstructions(lang: Lang, linkCode: string): string {
   });
 }
 
-export function alreadyLinked(lang: Lang, igScopedId: string | null): string {
-  const text = t(lang, 'alreadyLinked', { account: account() });
-  return igScopedId ? `${text}\n\n<i>IGSID: <code>${escapeHtml(igScopedId)}</code></i>` : text;
+/** IGSID ichki identifikator — foydalanuvchiga ko'rsatilmaydi (faqat bazada/loglarda). */
+export function alreadyLinked(lang: Lang): string {
+  return t(lang, 'alreadyLinked', { account: account() });
 }
 
 export const helpText = (lang: Lang): string =>

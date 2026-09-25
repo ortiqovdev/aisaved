@@ -99,6 +99,7 @@ Send it to @{account} in an Instagram DM.`,
   // ---------- Kiruvchi xabarlar ----------
   // ---------- /round ----------
   cmdRound: `Make a video round (reply to a video)`,
+  cmdTop: `Top trending songs`,
   roundHowTo: `⭕ Reply to a video with /round — I'll turn it into a round video message.
 
 <i>Tap the video → Reply → type /round</i>`,

@@ -44,17 +44,23 @@ export interface SourceVideo {
   /** Fayl mazmuniga bog'langan doimiy ID — musiqa keshi kaliti. */
   fileUniqueId: string;
   fileSize: number | undefined;
+  /** Telegram bergan davomiylik (sekund) — bo'lsa ffprobe chaqirilmaydi. */
+  duration?: number | undefined;
 }
 
 /** Xabardan videoni oladi (dumaloq bo'lmagan har qanday video). */
 export function pickVideo(message: Message): SourceVideo | null {
-  const file =
-    message.video ??
-    message.animation ??
-    (message.document?.mime_type?.startsWith('video/') ? message.document : undefined);
-  return file
-    ? { fileId: file.file_id, fileUniqueId: file.file_unique_id, fileSize: file.file_size }
-    : null;
+  const media = message.video ?? message.animation;
+  if (media) {
+    return {
+      fileId: media.file_id,
+      fileUniqueId: media.file_unique_id,
+      fileSize: media.file_size,
+      duration: media.duration,
+    };
+  }
+  const doc = message.document?.mime_type?.startsWith('video/') ? message.document : undefined;
+  return doc ? { fileId: doc.file_id, fileUniqueId: doc.file_unique_id, fileSize: doc.file_size } : null;
 }
 
 /** /round buyrug'i — videoga javob qilib yozilgan bo'lishi kerak. */
@@ -98,38 +104,47 @@ export async function startRound(
   }
 
   busyUsers.add(from.id);
-  try {
-    const status = await ctx.api.sendMessage(chatId, ctx.t('roundWorking'), {
+  // Yuklab olish "Dumaloq qilyapman..." xabari bilan PARALLEL boshlanadi —
+  // Telegram'ga har bir so'rov ~0.2–0.5 s, ularni ketma-ket kutish shart emas
+  const status = ctx.api
+    .sendMessage(chatId, ctx.t('roundWorking'), {
       reply_parameters: { message_id: videoMessageId, allow_sending_without_reply: true },
-    });
-    void convertAndSend(ctx, chatId, videoMessageId, status.message_id, video).finally(() =>
-      busyUsers.delete(from.id),
-    );
-  } catch (e) {
-    busyUsers.delete(from.id);
-    throw e;
-  }
+    })
+    .then((m) => m.message_id);
+  // Xabar yuborilmasa ham (masalan, huquq yo'q) handler xatosi bo'lmasin —
+  // convertAndSend buni o'zi hal qiladi
+  status.catch(() => undefined);
+  void convertAndSend(ctx, chatId, videoMessageId, status, video).finally(() =>
+    busyUsers.delete(from.id),
+  );
 }
 
 async function convertAndSend(
   ctx: BotContext,
   chatId: number,
   replyToId: number,
-  statusId: number,
+  status: Promise<number>,
   video: SourceVideo,
 ): Promise<void> {
+  const started = Date.now();
   let sourcePath: string | null = null;
   let notePath: string | null = null;
+  let holdsSlot = false;
 
-  await acquireSlot();
   try {
-    await ctx.api.sendChatAction(chatId, 'upload_video_note').catch(() => undefined);
+    void ctx.api.sendChatAction(chatId, 'upload_video_note').catch(() => undefined);
 
+    // Yuklash CPU talab qilmaydi — slot faqat ffmpeg uchun olinadi
     const url = await resolveTelegramFileUrl(video.fileId);
     const downloaded = await downloadMedia(url, replyToId);
     sourcePath = downloaded.filePath;
+    const downloadMs = Date.now() - started;
 
-    const note = await makeVideoNote(sourcePath);
+    await acquireSlot();
+    holdsSlot = true;
+    const note = await makeVideoNote(sourcePath, video.duration);
+    releaseSlot();
+    holdsSlot = false;
     notePath = note.filePath;
 
     await ctx.api.sendVideoNote(chatId, new InputFile(note.filePath), {
@@ -139,21 +154,28 @@ async function convertAndSend(
     });
 
     // "Dumaloq qilyapman..." xabari o'z vazifasini bajardi. Kesilgan bo'lsa —
-    // o'rniga sababini yozib qo'yamiz, aks holda shunchaki o'chiramiz.
-    if (note.trimmed) {
-      await ctx.api.editMessageText(chatId, statusId, ctx.t('roundTrimmed')).catch(() => undefined);
-    } else {
-      await ctx.api.deleteMessage(chatId, statusId).catch(() => undefined);
+    // o'rniga sababini yozib qo'yamiz, aks holda shunchaki o'chiramiz (kutmasdan).
+    const statusId = await status.catch(() => null);
+    if (statusId !== null) {
+      void (note.trimmed
+        ? ctx.api.editMessageText(chatId, statusId, ctx.t('roundTrimmed'))
+        : ctx.api.deleteMessage(chatId, statusId)
+      ).catch(() => undefined);
     }
-    logger.info({ chatId, duration: note.duration, trimmed: note.trimmed }, 'Dumaloq video yuborildi');
+    logger.info(
+      { chatId, duration: note.duration, trimmed: note.trimmed, downloadMs, ms: Date.now() - started },
+      'Dumaloq video yuborildi',
+    );
   } catch (e) {
     logger.warn({ chatId, err: errMessage(e) }, 'Dumaloq video yasab bo\'lmadi');
     const text = failureText(ctx, e);
-    await ctx.api
-      .editMessageText(chatId, statusId, text)
-      .catch(() => ctx.api.sendMessage(chatId, text).catch(() => undefined));
+    const statusId = await status.catch(() => null);
+    await (statusId !== null
+      ? ctx.api.editMessageText(chatId, statusId, text)
+      : Promise.reject(new Error('status yo\'q'))
+    ).catch(() => ctx.api.sendMessage(chatId, text).catch(() => undefined));
   } finally {
-    releaseSlot();
+    if (holdsSlot) releaseSlot();
     await safeUnlink(notePath);
     await safeUnlink(sourcePath);
   }

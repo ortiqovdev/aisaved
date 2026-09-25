@@ -90,6 +90,7 @@ Uni Instagram'da @{account} ga DM qiling.`,
 
   // ---------- /round ----------
   cmdRound: `Videoni dumaloq qilish (videoga javob)`,
+  cmdTop: `Top trend qo'shiqlar`,
   roundHowTo: `⭕ Videoga javob tariqasida /round yozing — uni dumaloq video xabarga aylantiraman.
 
 <i>Videoni bosing → Javob berish (Reply) → /round yozing</i>`,

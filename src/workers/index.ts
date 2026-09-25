@@ -9,7 +9,12 @@ import * as usersRepo from '../db/users.repo.ts';
 import { TELEGRAM_SOURCE } from '../lib/constants.ts';
 import { showFailure } from '../bot/notify.ts';
 import { forgetStatusCard, statusCardOf } from '../bot/status-card.ts';
-import { IG_REACTION } from '../services/instagram.ts';
+import {
+  IG_REACTION,
+  instagramMessageIdOf,
+  toPlainText,
+  trySendInstagramText,
+} from '../services/instagram.ts';
 import { msg, t } from '../i18n/index.ts';
 import { langOfUser } from '../i18n/user-lang.ts';
 import { processRequest, reactOnInstagram, targetChatOf } from './processor.ts';
@@ -132,8 +137,12 @@ async function notifyUserOfFailure(job: RequestRow, e: unknown): Promise<void> {
       // "Qabul qilindi" kartasi bo'lsa — yangi xabar emas, kartaning matni xatoga almashadi
       await showFailure(targetChatOf(job, user.telegram_id), text, await statusCardOf(job.id));
       forgetStatusCard(job.id);
-      // Instagram'dan kelgan bo'lsa — reelsga ❌ (sababi Telegram'da yozildi)
+      // Instagram'dan kelgan bo'lsa — reelsga ❌ va sababi Instagram chatiga ham
+      // (foydalanuvchi reelsni o'sha yerda yuborgan — xatoni o'sha yerda ko'rsin)
       await reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.fail);
+      if (instagramMessageIdOf(job.ig_message_id) && user.ig_scoped_id) {
+        await trySendInstagramText(user.ig_scoped_id, toPlainText(text));
+      }
     }
   } catch (dbErr) {
     logger.warn({ err: errMessage(dbErr) }, 'Xato haqida xabar berib bo\'lmadi');

@@ -100,14 +100,30 @@ const USER_TTL_MS = 5 * 60_000;
 const idByTelegram = new Map<number, number>();
 const rowById = new Map<number, { row: UserRow; at: number }>();
 
+const idByIgsid = new Map<string, number>();
+
 function remember(row: UserRow): UserRow {
   idByTelegram.set(row.telegram_id, row.id);
+  if (row.ig_scoped_id) idByIgsid.set(row.ig_scoped_id, row.id);
   rowById.set(row.id, { row, at: Date.now() });
   return row;
 }
 
 function forget(id: number | undefined): void {
   if (id !== undefined) rowById.delete(id);
+}
+
+/**
+ * Instagram webhook'i uchun: userni IGSID bo'yicha, keshdan (5 daqiqa).
+ * Keshdagi qator IGSID'ga hali ham mos kelishi tekshiriladi — bog'lanish
+ * uzilgan/boshqaga o'tgan bo'lsa (remember() qatorni yangilaydi) bazadan o'qiladi.
+ */
+export async function findByIgScopedIdCached(igsid: string): Promise<UserRow | null> {
+  const id = idByIgsid.get(igsid);
+  const hit = id !== undefined ? rowById.get(id) : undefined;
+  if (hit && hit.row.ig_scoped_id === igsid && Date.now() - hit.at < USER_TTL_MS) return hit.row;
+  const row = await findByIgScopedId(igsid);
+  return row ? remember(row) : null;
 }
 
 /** Worker uchun: userni id bo'yicha, keshdan (5 daqiqa). */

@@ -10,6 +10,12 @@ import { t, type Lang } from '../i18n/index.ts';
 import * as usersRepo from '../db/users.repo.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
 import { wakeWorkers } from '../workers/wake.ts';
+import {
+  dropStatusCard,
+  rememberStatusCard,
+  sendStatusCard,
+  setStatusCardText,
+} from './status-card.ts';
 
 /**
  * Yuklab olingan video tagidagi tugmalar:
@@ -86,6 +92,13 @@ export async function handleFindSongButton(ctx: BotContext): Promise<void> {
     return;
   }
 
+  const chatId = found.message.chat.id;
+  const videoMessageId = found.message.message_id;
+
+  // Video kabi: darhol loading (emoji animatsiya) videoga javob bo'lib chiqadi,
+  // natija tayyor bo'lgach uning o'rnini egallaydi ([status-card.ts])
+  const statusId = await sendStatusCard(chatId, ctx.lang, 'songSearching', videoMessageId);
+
   const userId = await usersRepo.userIdFor({
     telegramId: from.id,
     username: from.username,
@@ -96,20 +109,30 @@ export async function handleFindSongButton(ctx: BotContext): Promise<void> {
   const result = await requestsRepo.enqueueWithLimit({
     userId,
     // `:song` — shu video uchun bitta so'rov: qayta bosish dublikat bo'ladi
-    igMessageId: `tg:${found.message.chat.id}:${found.message.message_id}:song`,
+    igMessageId: `tg:${chatId}:${videoMessageId}:song`,
     mediaUrl: found.video.fileId,
     mediaType: TELEGRAM_SOURCE,
     fileUniqueId: found.video.fileUniqueId,
+    statusMessageId: statusId,
   });
 
   if (result.status === 'limit') {
-    await ctx.answerCallbackQuery({ text: ctx.t('pendingLimit', { n: result.pending }), show_alert: true });
+    const text = ctx.t('pendingLimit', { n: result.pending });
+    if (statusId) await setStatusCardText(chatId, statusId, text);
+    await ctx.answerCallbackQuery(statusId ? {} : { text, show_alert: true });
     return;
   }
-  const queued = result.status === 'queued';
-  if (queued) wakeWorkers();
-  await ctx.answerCallbackQuery({ text: ctx.t(queued ? 'songSearching' : 'songAlreadyRequested') });
-  if (queued) logger.info({ requestId: result.row.id, telegramId: from.id }, 'Tugma orqali qo\'shiq so\'raldi');
+  if (result.status === 'duplicate') {
+    // Bu video uchun avval so'ralgan — natija allaqachon video ostida (yoki kelmoqda)
+    await dropStatusCard(chatId, statusId);
+    await ctx.answerCallbackQuery({ text: ctx.t('songAlreadyRequested') });
+    return;
+  }
+
+  if (statusId) rememberStatusCard(result.row.id, statusId);
+  wakeWorkers();
+  await ctx.answerCallbackQuery();
+  logger.info({ requestId: result.row.id, telegramId: from.id }, 'Tugma orqali qo\'shiq so\'raldi');
 }
 
 /** ⭕ — /round bilan bir xil, faqat video bosilgan xabarning o'zi. */

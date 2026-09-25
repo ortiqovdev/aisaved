@@ -10,18 +10,21 @@ import {
   firstAttachmentType,
   flattenEvents,
   trySendInstagramAction,
+  toPlainText,
   trySendInstagramReaction,
   trySendInstagramText,
   verifyWebhookSignature,
   type ExtractedMedia,
   type IgMessagingEvent,
   type IgWebhookBody,
+  type IgReaction,
 } from '../services/instagram.ts';
 import { isResolverConfigured, parseInstagramLink } from '../services/ig-resolver.ts';
 import { IG_LINK_SOURCE } from '../lib/constants.ts';
 import { trySendText } from '../bot/notify.ts';
 import { rememberStatusCard, sendStatusCard } from '../bot/status-card.ts';
 import { wakeWorkers } from '../workers/wake.ts';
+import { startPreparing } from '../services/prepare.ts';
 import { escapeHtml, unsupportedReplyKey } from '../bot/messages.ts';
 import { t } from '../i18n/index.ts';
 import { langOfUser } from '../i18n/user-lang.ts';
@@ -109,8 +112,9 @@ async function handleEvent(event: IgMessagingEvent): Promise<void> {
   // Bizning akkauntimizdan kelgan bo'lsa — o'tkazib yuboramiz
   if (senderId === event.recipient?.id) return;
 
-  // "Ko'rildi" — foydalanuvchi xabari yetib borganini darhol biladi
-  await trySendInstagramAction(senderId, 'mark_seen');
+  // "Ko'rildi" — foydalanuvchi xabari yetib borganini darhol biladi.
+  // Kutmaymiz: Instagram API ~0.3 s, qolgan ish (⌛, navbat) unga bog'liq emas.
+  void trySendInstagramAction(senderId, 'mark_seen');
 
   /**
    * Attachment payloadining xom ko'rinishi — Meta formatni o'zgartirganda
@@ -129,7 +133,9 @@ async function handleEvent(event: IgMessagingEvent): Promise<void> {
 
   const media = extractVideoAttachment(event);
   if (media) {
-    await handleMedia(senderId, event, media);
+    // ⌛ — bazaga murojaatdan OLDIN: foydalanuvchi reels qabul qilinganini darhol ko'radi
+    const waiting = markWaiting(senderId, event);
+    await handleMedia(senderId, event, media, waiting);
     return;
   }
 
@@ -145,29 +151,50 @@ async function handleEvent(event: IgMessagingEvent): Promise<void> {
 }
 
 /** Xabarga reaksiya qo'yadi (`mid` bo'lmasa — jim o'tadi). */
-async function react(igScopedId: string, event: IgMessagingEvent, ok: boolean): Promise<void> {
+async function react(igScopedId: string, event: IgMessagingEvent, reaction: IgReaction): Promise<void> {
   const mid = event.message?.mid;
   if (!mid) return;
-  await trySendInstagramReaction(igScopedId, mid, ok ? IG_REACTION.ok : IG_REACTION.fail);
+  await trySendInstagramReaction(igScopedId, mid, reaction);
 }
 
 /**
- * Qayta ishlab bo'lmaydigan attachment (rasm, stiker, ovozli xabar...).
- * Instagram'da faqat ❌ reaksiya; sababi bog'langan foydalanuvchiga
- * Telegram'da aytiladi. Bog'lanmagan foydalanuvchining esa Telegram'i
- * noma'lum — unga Instagram'ning o'zida yozishdan boshqa yo'l yo'q.
+ * ⌛ reaksiyasi — har bir xabarga BIR MARTA. Meta webhook'ni qayta yuborsa,
+ * ⌛ allaqachon qo'yilgan ✅ ning ustidan yozib yubormasin.
  */
-async function handleUnsupported(igScopedId: string, event: IgMessagingEvent): Promise<void> {
-  await react(igScopedId, event, false);
+const waitingSent = new Map<string, number>();
+const WAITING_TTL_MS = 10 * 60_000;
 
-  const key = unsupportedReplyKey(firstAttachmentType(event));
-  const user = await usersRepo.findByIgScopedId(igScopedId);
-  const reply = t(langOfUser(user), key);
-  if (user?.link_status === 'linked') {
-    await trySendText(user.telegram_id, reply);
-  } else {
-    await trySendInstagramText(igScopedId, reply);
+function markWaiting(igScopedId: string, event: IgMessagingEvent): Promise<void> {
+  const mid = event.message?.mid;
+  if (!mid || waitingSent.has(mid)) return Promise.resolve();
+  const now = Date.now();
+  waitingSent.set(mid, now);
+  if (waitingSent.size > 5000) {
+    for (const [k, at] of waitingSent) if (now - at > WAITING_TTL_MS) waitingSent.delete(k);
   }
+  return react(igScopedId, event, IG_REACTION.wait);
+}
+
+/**
+ * Xato: reelsga ❌ va sababi Instagram chatiga — foydalanuvchi qayerda bo'lsa, o'sha yerda.
+ * @param after — ⌛ so'rovi: ❌ undan KEYIN ketishi shart, aks holda ⌛ ustidan yozib qo'yardi
+ */
+async function failInInstagram(
+  igScopedId: string,
+  event: IgMessagingEvent,
+  text: string,
+  after: Promise<void> = Promise.resolve(),
+): Promise<void> {
+  await after;
+  await react(igScopedId, event, IG_REACTION.fail);
+  await trySendInstagramText(igScopedId, toPlainText(text));
+}
+
+/** Qayta ishlab bo'lmaydigan attachment (rasm, stiker, ovozli xabar...) — ❌ va sababi. */
+async function handleUnsupported(igScopedId: string, event: IgMessagingEvent): Promise<void> {
+  const user = await usersRepo.findByIgScopedIdCached(igScopedId);
+  const key = unsupportedReplyKey(firstAttachmentType(event));
+  await failInInstagram(igScopedId, event, t(langOfUser(user), key));
 }
 
 /** Matnli xabar — bog'lash kodi bo'lishi mumkin. */
@@ -219,15 +246,13 @@ async function handleMedia(
   igScopedId: string,
   event: IgMessagingEvent,
   media: ExtractedMedia,
+  waiting: Promise<void>,
 ): Promise<void> {
-  const user = await usersRepo.findByIgScopedId(igScopedId);
+  const user = await usersRepo.findByIgScopedIdCached(igScopedId);
 
   if (!user || user.link_status !== 'linked') {
     logger.info({ igScopedId }, 'Bog\'lanmagan foydalanuvchidan media keldi');
-    await react(igScopedId, event, false);
-    // Istisno: bog'lanmagan foydalanuvchining Telegram'i noma'lum — bog'lanish
-    // yo'lini faqat shu yerda aytish mumkin, aks holda u nima qilishni bilmaydi.
-    await trySendInstagramText(igScopedId, t(langOfUser(user), 'igNotLinked'));
+    await failInInstagram(igScopedId, event, t(langOfUser(user), 'igNotLinked'), waiting);
     return;
   }
   const lang = langOfUser(user);
@@ -252,10 +277,15 @@ async function handleMedia(
       { igScopedId, type: media.type, url: media.url, resolver: isResolverConfigured() },
       'Meta media o\'rniga sahifa havolasini yubordi, resolver esa yo\'q',
     );
-    await react(igScopedId, event, false);
+    await failInInstagram(igScopedId, event, t(lang, 'failInstagramSource'), waiting);
+    // Telegram'da — ishlaydigan muqobil yo'l (videoni o'zi tashlashi)
     await trySendText(user.telegram_id, t(lang, 'igNotDownloadable'));
     return;
   }
+
+  // Resolver navbatga yozish bilan PARALLEL boshlanadi — worker jobni olganda
+  // post tayyor turadi (Supabase'ning ~1 s kechikishi yashiriladi)
+  if (link && viaResolver) startPreparing(`ig:${link.shortcode}`, 'instagram', link.url);
 
   // Spam himoyasi + navbat — bitta so'rovda (0005). Media keshi shu yerda
   // emas, worker'da tekshiriladi: Meta webhook'ni qayta yuborsa, dublikatni
@@ -273,8 +303,7 @@ async function handleMedia(
 
   if (result.status === 'limit') {
     logger.info({ userId: user.id, pending: result.pending }, 'Foydalanuvchi navbat limitiga yetdi');
-    await react(igScopedId, event, false);
-    await trySendText(user.telegram_id, t(lang, 'igPendingLimit', { n: result.pending }));
+    await failInInstagram(igScopedId, event, t(lang, 'igPendingLimit', { n: result.pending }), waiting);
     return;
   }
   if (result.status === 'duplicate') return; // dublikat webhook — javob ham takrorlanmasin

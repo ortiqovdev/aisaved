@@ -1,68 +1,17 @@
 import { InlineKeyboard } from 'grammy';
 import type { SongInfo } from '../services/audd.ts';
-import { buildQuery, searchTracks, type DeezerTrack } from '../services/deezer.ts';
 import { escapeHtml } from './messages.ts';
 import { t, type Lang } from '../i18n/index.ts';
+import {
+  searchYouTube,
+  type MusicTrack,
+  type TrendingTrack,
+} from '../services/youtube.ts';
 
-/** Inline tugma callback prefiksi: preview yuborish. */
-export const PREVIEW_PREFIX = 'pv';
-const MAX_VERSIONS = 5;
-/** Filtrdan keyin 5 ta qolishi uchun kengroq qidiramiz. */
-const SEARCH_LIMIT = 25;
-
-/**
- * Taqqoslash uchun nomni soddalashtiradi:
- *   "Mambo Italiano (2005 Remaster)" -> "mambo italiano"
- */
-function normalizeTitle(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/\(.*?\)|\[.*?\]/g, ' ') // qavs ichidagi izohlar
-    .replace(/[^\p{L}\p{N}]+/gu, ' ') // tinish belgilari
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function titlesMatch(a: string, b: string): boolean {
-  const x = normalizeTitle(a);
-  const y = normalizeTitle(b);
-  if (!x || !y) return false;
-  if (x === y) return true;
-  // Qisqa nomlarda "ichida bor" tekshiruvi tasodifiy mos kelib qolishi mumkin
-  const shorter = x.length <= y.length ? x : y;
-  if (shorter.length < 5) return false;
-  return x.includes(y) || y.includes(x);
-}
-
-/**
- * Qidiruv natijasidan HAQIQATAN shu qo'shiqning versiyalarini ajratadi.
- *
- * Deezer bitta albomdagi boshqa treklarni ham qaytaradi — ularni ko'rsatish
- * chalkash bo'lardi ("Versiyalar" deb yozib, butunlay boshqa qo'shiq berish).
- * Shuning uchun nomi mos kelganlarini olamiz, o'sha ijrochinikini yuqoriga
- * qo'yamiz va takrorlarni tashlaymiz.
- */
-function pickVersions(tracks: DeezerTrack[], song: SongInfo): DeezerTrack[] {
-  const sameTitle = tracks.filter((t) => t.previewUrl && titlesMatch(t.title, song.title));
-
-  const artistKey = normalizeTitle(song.artist);
-  sameTitle.sort((a, b) => {
-    const aSame = normalizeTitle(a.artist) === artistKey ? 0 : 1;
-    const bSame = normalizeTitle(b.artist) === artistKey ? 0 : 1;
-    return aSame - bSame;
-  });
-
-  const seen = new Set<string>();
-  const out: DeezerTrack[] = [];
-  for (const t of sameTitle) {
-    const key = `${normalizeTitle(t.artist)}|${normalizeTitle(t.title)}|${t.durationSec}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(t);
-    if (out.length >= MAX_VERSIONS) break;
-  }
-  return out;
-}
+/** Inline tugma callback prefikslari */
+export const YT_AUDIO_DL_PREFIX = 'yd';
+export const TOP_DL_PREFIX = 'tp';
+export const PREVIEW_PREFIX = 'pv'; // Eski qisqa parcha bilan moslik uchun
 
 export interface SongMessage {
   text: string;
@@ -70,36 +19,17 @@ export interface SongMessage {
   coverUrl: string | null;
 }
 
-/**
- * Telegram limiti: rasm caption'i 1024 belgi (oddiy xabar 4096).
- * Natija muqova bilan yuborilgani uchun caption'ga sig'ishi kerak —
- * aks holda sendPhoto 400 qaytaradi va muqovasiz matnga tushib qolamiz.
- */
 const CAPTION_LIMIT = 1024;
-/** Bitta nom/ijrochi/albom uchun maksimal uzunlik. */
-const FIELD_LIMIT = 120;
+const FIELD_LIMIT = 100;
 
-/** Xom matnni (escape qilishdan oldin) qisqartiradi. */
 function clip(value: string, limit = FIELD_LIMIT): string {
   const v = value.trim();
   return v.length <= limit ? v : `${v.slice(0, limit - 1)}…`;
 }
 
-const NUMBER_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
-
-function formatDuration(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
-
 /**
- * Aniqlangan qo'shiq uchun to'liq javob: matn + muqova + inline tugmalar.
- *
- * Tugmalar:
- *   1️⃣..5️⃣  — Deezer'dagi versiyalar; bosilganda RASMIY 30 soniyalik
- *              preview audio fayl sifatida yuboriladi
- *   🎧/🍎/🔗 — to'liq qo'shiqni tinglash uchun platforma havolalari
+ * Aniqlangan qo'shiq uchun to'liq javob (SongFastBot uslubida):
+ * Qo'shiq nomi + YouTube'dagi 5 ta eng yaxshi versiya + 1..5 yuklab olish tugmalari.
  */
 export async function buildSongMessage(song: SongInfo | null, lang: Lang): Promise<SongMessage> {
   if (!song) {
@@ -110,79 +40,109 @@ export async function buildSongMessage(song: SongInfo | null, lang: Lang): Promi
     };
   }
 
-  const found = await searchTracks(buildQuery(song.artist, song.title), SEARCH_LIMIT);
-  const versions = pickVersions(found, song);
+  const query = `${song.artist} ${song.title}`.trim();
+  const ytTracks = await searchYouTube(query, 5);
 
-  // HTML tegi o'rtasidan kesish Telegram'da "can't parse entities" beradi,
-  // shuning uchun XOM matnni escape qilishdan OLDIN qisqartiramiz.
-  const header = [
-    `🎵 <b>${escapeHtml(clip(song.title))}</b>`,
-    `👤 ${escapeHtml(clip(song.artist))}`,
+  const lines: string[] = [
+    `🎵 <b>${escapeHtml(clip(song.title))}</b> — <i>${escapeHtml(clip(song.artist))}</i>`,
   ];
-  if (song.album) header.push(`💿 ${escapeHtml(clip(song.album))}`);
+  if (song.album) lines.push(`💿 <i>${escapeHtml(clip(song.album))}</i>`);
 
-  const lines = [...header];
-  if (versions.length > 0) {
-    lines.push('', t(lang, 'versionsHeader'));
-    versions.forEach((t, i) => {
-      const num = NUMBER_EMOJI[i] ?? `${i + 1}.`;
-      const album = t.album ? ` · <i>${escapeHtml(clip(t.album))}</i>` : '';
-      lines.push(
-        `${num} ${escapeHtml(clip(t.artist))} — ${escapeHtml(clip(t.title))}${album} <b>${formatDuration(t.durationSec)}</b>`,
-      );
+  if (ytTracks.length > 0) {
+    lines.push('');
+    ytTracks.forEach((t, i) => {
+      lines.push(`${i + 1}. ${escapeHtml(clip(t.title, 70))} <b>${t.durationText}</b>`);
     });
   }
 
-  // Uzun nomlar bilan 5 ta versiya caption limitidan oshib ketishi mumkin.
-  // Bunday holda oxirgi versiya SATRLARINI olib tashlaymiz (butun satr —
-  // teglar muvozanati buzilmaydi). Tugmalar baribir joyida qoladi.
-  while (lines.join('\n').length > CAPTION_LIMIT && lines.length > header.length) {
+  // Caption limitidan oshmasligini ta'minlash
+  while (lines.join('\n').length > CAPTION_LIMIT && lines.length > 2) {
     lines.pop();
+  }
+
+  const kb = new InlineKeyboard();
+  let hasAny = false;
+
+  // 1-qator: 1..5 yuklash tugmalari
+  if (ytTracks.length > 0) {
+    ytTracks.forEach((t, i) => {
+      kb.text(String(i + 1), `${YT_AUDIO_DL_PREFIX}:${t.id}`).success();
+    });
+    kb.row();
+    hasAny = true;
+  }
+
+  // YouTube qidiruv havolasi (Spotify/Apple Music tugmalari olib tashlangan)
+  kb.url(
+    t(lang, 'btnYoutube'),
+    `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+  );
+  hasAny = true;
+
+  return {
+    text: lines.join('\n'),
+    keyboard: hasAny ? kb : undefined,
+    coverUrl: song.coverUrl ?? ytTracks[0]?.thumbnail ?? null,
+  };
+}
+
+/**
+ * Matn orqali qidiruv natijalari xabari (@SongFastBot kabi)
+ */
+export function buildSearchResultsMessage(
+  query: string,
+  tracks: MusicTrack[],
+  lang: Lang,
+): { text: string; keyboard: InlineKeyboard } {
+  const lines: string[] = [
+    `🎵 <b>Natijalar:</b> <i>"${escapeHtml(clip(query, 50))}"</i>`,
+    '',
+  ];
+
+  tracks.forEach((t, i) => {
+    lines.push(`${i + 1}. ${escapeHtml(clip(t.title, 70))} <b>${t.durationText}</b>`);
+  });
+
+  const kb = new InlineKeyboard();
+  tracks.forEach((t, i) => {
+    kb.text(String(i + 1), `${YT_AUDIO_DL_PREFIX}:${t.id}`).success();
+  });
+
+  return {
+    text: lines.join('\n'),
+    keyboard: kb,
+  };
+}
+
+/**
+ * /top Trend qo'shiqlar xabari
+ */
+export function buildTopChartsMessage(
+  tracks: TrendingTrack[],
+  lang: Lang,
+): { text: string; keyboard: InlineKeyboard } {
+  const lines: string[] = [
+    `🔥 <b>Top Trend qo'shiqlar:</b>`,
+    '',
+  ];
+
+  tracks.forEach((t, i) => {
+    lines.push(`${i + 1}. ${escapeHtml(clip(t.artist, 35))} — ${escapeHtml(clip(t.title, 35))} <b>${t.durationText}</b>`);
+  });
+
+  const kb = new InlineKeyboard();
+  tracks.slice(0, 5).forEach((t, i) => {
+    kb.text(String(i + 1), `${TOP_DL_PREFIX}:${i}`).success();
+  });
+  if (tracks.length > 5) {
+    kb.row();
+    tracks.slice(5, 10).forEach((t, i) => {
+      kb.text(String(i + 6), `${TOP_DL_PREFIX}:${i + 5}`).success();
+    });
   }
 
   return {
     text: lines.join('\n'),
-    keyboard: buildKeyboard(song, versions, lang),
-    coverUrl: song.coverUrl ?? versions[0]?.coverUrl ?? null,
+    keyboard: kb,
   };
-}
-
-function buildKeyboard(
-  song: SongInfo,
-  versions: DeezerTrack[],
-  lang: Lang,
-): InlineKeyboard | undefined {
-  const kb = new InlineKeyboard();
-  let hasAny = false;
-
-  // 1-qator: versiya raqamlari — asosiy harakat, shuning uchun yashil (`success`)
-  if (versions.length > 0) {
-    versions.forEach((track, i) => {
-      kb.text(NUMBER_EMOJI[i] ?? String(i + 1), `${PREVIEW_PREFIX}:${track.id}`).success();
-    });
-    kb.row();
-    hasAny = true;
-  }
-
-  // 2-qator: platforma havolalari (to'liq qo'shiq o'sha yerda tinglanadi)
-  const links: Array<[string, string]> = [];
-  if (song.spotifyUrl) links.push(['🎧 Spotify', song.spotifyUrl]);
-  if (song.appleUrl) links.push(['🍎 Apple Music', song.appleUrl]);
-  if (versions[0]?.link) links.push(['💜 Deezer', versions[0].link]);
-  if (links.length === 0 && song.link) links.push([t(lang, 'btnListen'), song.link]);
-
-  for (const [label, url] of links) kb.url(label, url);
-  if (links.length > 0) {
-    kb.row();
-    hasAny = true;
-  }
-
-  // 3-qator: YouTube'da qidirish
-  kb.url(
-    t(lang, 'btnYoutube'),
-    `https://www.youtube.com/results?search_query=${encodeURIComponent(buildQuery(song.artist, song.title))}`,
-  );
-  hasAny = true;
-
-  return hasAny ? kb : undefined;
 }

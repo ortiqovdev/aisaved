@@ -20,7 +20,7 @@ import { msg } from '../i18n/index.ts';
  * Sozlanmagan bo'lsa — tushunarli xato qaytaradi, ilova qulamaydi.
  */
 
-export type MediaKind = 'video' | 'photo';
+export type MediaKind = 'video' | 'photo' | 'audio';
 
 export interface ResolvedItem {
   /** To'g'ridan-to'g'ri yuklab olinadigan fayl havolasi. */

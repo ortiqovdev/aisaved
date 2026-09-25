@@ -131,13 +131,14 @@ export async function trySendInstagramAction(
 /**
  * Foydalanuvchi yuborgan reels'ga qo'yiladigan reaksiya.
  *
- * Instagram'da video yuborgan foydalanuvchiga matnli javob yozmaymiz —
- * natija Telegram'ga boradi. Instagram tomonda esa holat faqat reaksiya
- * bilan bildiriladi: hammasi joyida bo'lsa ✅, har qanday muammoda ❌.
+ * Instagram'da video yuborgan foydalanuvchiga holat reaksiya bilan
+ * bildiriladi (bitta xabarda bitta reaksiya — yangisi eskisining o'rnini oladi):
+ *   ⌛ qabul qilindi, ishlanmoqda → ✅ natija Telegram'ga yuborildi
+ *                                 → ❌ xato (sababi Instagram chatiga yoziladi)
  * (API emoji'ni to'g'ridan-to'g'ri qabul qiladi; "like" kabi nomlar esa
  * "Invalid reaction" bilan rad etiladi.)
  */
-export const IG_REACTION = { ok: '✅', fail: '❌' } as const;
+export const IG_REACTION = { wait: '⌛', ok: '✅', fail: '❌' } as const;
 export type IgReaction = (typeof IG_REACTION)[keyof typeof IG_REACTION];
 
 /** Reaksiya qo'yadi. Xato asosiy oqimni to'xtatmaydi — faqat log qilinadi. */
@@ -168,6 +169,19 @@ export async function trySendInstagramReaction(
   } catch (e) {
     logger.warn({ igScopedId, reaction, err: errMessage(e) }, 'Instagram reaksiya yuborilmadi');
   }
+}
+
+/**
+ * Telegram HTML matnini Instagram uchun oddiy matnga aylantiradi
+ * (Instagram DM teglarni ko'rsatmaydi — `<b>` harfma-harf chiqib qolardi).
+ */
+export function toPlainText(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&');
 }
 
 /**

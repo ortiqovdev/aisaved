@@ -90,6 +90,7 @@ Instagram'da @{account} hesabına DM olarak gönder.`,
 
   // ---------- /round ----------
   cmdRound: `Videoyu yuvarlak yap (videoya yanıt olarak)`,
+  cmdTop: `En popüler trend şarkılar`,
   roundHowTo: `⭕ Bir videoya /round ile yanıt ver — onu yuvarlak görüntülü mesaja çevireyim.
 
 <i>Videoya dokun → Yanıtla → /round yaz</i>`,
