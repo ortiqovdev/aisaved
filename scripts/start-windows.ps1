@@ -6,6 +6,9 @@
 # (ikkalasi ham .gitignore'da, commit qilinmaydi).
 
 $ErrorActionPreference = 'Stop'
+# Node chiqishidagi emoji/harflar buzilmasligi uchun (masalan "Γ¥î" o'rniga "❌")
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
