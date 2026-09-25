@@ -85,6 +85,47 @@ export async function findById(id: number): Promise<UserRow | null> {
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// Xotiradagi kesh
+//
+// Supabase'gacha bitta so'rov ~0.5 s — har bir havola/video uchun userni
+// qayta o'qish foydalanuvchi javobini sezilarli sekinlashtirardi.
+//   - telegram_id → id: hech qachon o'zgarmaydi, muddatsiz saqlanadi
+//   - butun qator: 5 daqiqa; shu moduldagi har bir yozuvda yangilanadi.
+//     Alohida worker jarayonida (npm run worker) o'zgarish ko'pi bilan
+//     5 daqiqa kechikib ko'rinadi (til, Instagram bog'lanishi).
+// ---------------------------------------------------------------------------
+
+const USER_TTL_MS = 5 * 60_000;
+const idByTelegram = new Map<number, number>();
+const rowById = new Map<number, { row: UserRow; at: number }>();
+
+function remember(row: UserRow): UserRow {
+  idByTelegram.set(row.telegram_id, row.id);
+  rowById.set(row.id, { row, at: Date.now() });
+  return row;
+}
+
+function forget(id: number | undefined): void {
+  if (id !== undefined) rowById.delete(id);
+}
+
+/** Worker uchun: userni id bo'yicha, keshdan (5 daqiqa). */
+export async function findByIdCached(id: number): Promise<UserRow | null> {
+  const hit = rowById.get(id);
+  if (hit && Date.now() - hit.at < USER_TTL_MS) return hit.row;
+  const row = await findById(id);
+  return row ? remember(row) : null;
+}
+
+/**
+ * Tezkor yo'l uchun faqat user id: keshda bo'lsa bazaga umuman bormaydi,
+ * bo'lmasa userni topadi yoki yaratadi.
+ */
+export async function userIdFor(input: UpsertInput): Promise<number> {
+  return idByTelegram.get(input.telegramId) ?? (await getOrCreateByTelegramId(input)).id;
+}
+
 interface UpsertInput {
   telegramId: number;
   username?: string | undefined;
@@ -116,14 +157,14 @@ export async function getOrCreateByTelegramId(input: UpsertInput): Promise<UserR
         .select('*')
         .single<UserRow>();
       if (error) throw new Error(`User profilini yangilashda xato: ${error.message}`);
-      return data;
+      return remember(data);
     }
 
     // Bog'lanmagan userda kod yo'qolib qolgan bo'lsa — yangisini beramiz
     if (existing.link_status === 'pending' && !existing.link_code) {
       return ensureLinkCode(existing.id);
     }
-    return existing;
+    return remember(existing);
   }
 
   const linkCode = await generateUniqueLinkCode();
@@ -144,11 +185,11 @@ export async function getOrCreateByTelegramId(input: UpsertInput): Promise<UserR
     // Parallel /start bosilgan bo'lsa (unique violation) — mavjudini qaytaramiz
     if (error.code === '23505') {
       const again = await findByTelegramId(input.telegramId);
-      if (again) return again;
+      if (again) return remember(again);
     }
     throw new Error(`User yaratishda xato: ${error.message}`);
   }
-  return data;
+  return remember(data);
 }
 
 export async function ensureLinkCode(userId: number): Promise<UserRow> {
@@ -160,7 +201,7 @@ export async function ensureLinkCode(userId: number): Promise<UserRow> {
     .select('*')
     .single<UserRow>();
   if (error) throw new Error(`link_code yozishda xato: ${error.message}`);
-  return data;
+  return remember(data);
 }
 
 /**
@@ -183,6 +224,7 @@ export async function linkUserByCode(code: string, igScopedId: string): Promise<
       .update({ ig_scoped_id: null, link_status: 'pending', linked_at: null })
       .eq('id', occupied.id);
     if (unlinkErr) throw new Error(`Eski bog'lanishni uzishda xato: ${unlinkErr.message}`);
+    forget(occupied.id);
   }
 
   const { data, error } = await supabase
@@ -198,7 +240,7 @@ export async function linkUserByCode(code: string, igScopedId: string): Promise<
     .single<UserRow>();
 
   if (error) throw new Error(`Bog'lashda xato: ${error.message}`);
-  return data;
+  return remember(data);
 }
 
 /**
@@ -212,6 +254,7 @@ export async function setLanguage(telegramId: number, lang: Lang): Promise<boole
     .update({ language: lang })
     .eq('telegram_id', telegramId);
   if (error) throw new Error(`Tilni saqlashda xato: ${error.message}`);
+  forget(idByTelegram.get(telegramId));
   return true;
 }
 
@@ -230,5 +273,5 @@ export async function unlinkUser(userId: number): Promise<UserRow> {
     .select('*')
     .single<UserRow>();
   if (error) throw new Error(`Bog'lanishni uzishda xato: ${error.message}`);
-  return data;
+  return remember(data);
 }

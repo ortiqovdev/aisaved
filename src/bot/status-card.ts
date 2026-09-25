@@ -69,6 +69,13 @@ export function rememberStatusCard(requestId: number, messageId: number): void {
   byRequest.set(requestId, messageId);
 }
 
+/** Kartaning matnini almashtiradi (masalan navbat limiti). Xato — e'tiborsiz. */
+export async function setStatusCardText(chatId: number, messageId: number, text: string): Promise<void> {
+  await bot.api
+    .editMessageCaption(chatId, messageId, { caption: text, parse_mode: 'HTML' })
+    .catch((e: unknown) => logger.debug({ err: errMessage(e) }, 'Karta matni o\'zgarmadi'));
+}
+
 /** Dublikat so'rov — kartaga ehtiyoj qolmadi. */
 export async function dropStatusCard(chatId: number, messageId: number | null): Promise<void> {
   if (messageId) await bot.api.deleteMessage(chatId, messageId).catch(() => undefined);

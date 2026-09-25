@@ -5,6 +5,7 @@ import type { UserFromGetMe } from 'grammy/types';
 import { errMessage, sleep } from './lib/errors.ts';
 import { assertDbReady } from './db/supabase.ts';
 import * as requestsRepo from './db/requests.repo.ts';
+import { run, type RunnerHandle } from '@grammyjs/runner';
 import { bot, setupBotCommands } from './bot/index.ts';
 import { setBotInfo } from './bot/info.ts';
 import { instagramWebhookRouter } from './webhook/instagram.ts';
@@ -89,6 +90,50 @@ async function getMeWithRetry(attempts = 5): Promise<UserFromGetMe> {
   }
 }
 
+/**
+ * Telegram polling'ini kuzatib turadi va to'xtasa qayta ishga tushiradi.
+ *
+ * Runner 409 (boshqa getUpdates so'rovi — masalan deploy paytida eski va
+ * yangi nusxa bir lahzaga ustma-ust tushsa) va 401 ni tuzatib bo'lmaydigan
+ * xato deb to'xtaydi. Kuzatuvsiz bunda server "tirik" ko'rinardi (HTTP,
+ * worker ishlaydi), bot esa jimgina javob bermay qolardi.
+ */
+function superviseRunner(): { stop: () => Promise<void> } {
+  let current: RunnerHandle | null = null;
+  let stopping = false;
+  let delay = 5_000;
+
+  const start = (): void => {
+    current = run(bot);
+    logger.info('Telegram long polling boshlandi (parallel)');
+    const startedAt = Date.now();
+    void current.task()?.then(
+      () => undefined,
+      (e: unknown) => {
+        if (stopping) return;
+        // Uzoq ishlagan bo'lsa — kechikishni boshidan boshlaymiz
+        if (Date.now() - startedAt > 60_000) delay = 5_000;
+        logger.error(
+          { err: errMessage(e), retryInMs: delay },
+          'Telegram polling to\'xtadi — qayta ishga tushiriladi',
+        );
+        setTimeout(() => {
+          if (!stopping) start();
+        }, delay).unref();
+        delay = Math.min(delay * 2, 60_000);
+      },
+    );
+  };
+
+  start();
+  return {
+    stop: async () => {
+      stopping = true;
+      if (current?.isRunning()) await current.stop();
+    },
+  };
+}
+
 async function main(): Promise<void> {
   logger.info(
     {
@@ -135,12 +180,16 @@ async function main(): Promise<void> {
     );
   });
 
-  // Telegram: long polling (webhook URL kerak emas).
-  // Agar oldin webhook o'rnatilgan bo'lsa, uni olib tashlaymiz.
-  void bot.start({
-    drop_pending_updates: !isProd,
-    onStart: () => logger.info('Telegram long polling boshlandi'),
-  });
+  // Telegram: long polling (webhook URL kerak emas). Agar oldin webhook
+  // o'rnatilgan bo'lsa, uni olib tashlaymiz.
+  //
+  // `bot.start()` update'larni KETMA-KET qayta ishlaydi — har bir havola
+  // bazaga bir necha so'rov qiladi, shuning uchun 100 kishi bir vaqtda yozsa,
+  // oxirgisi daqiqalab kutardi. Runner esa ularni parallel qayta ishlaydi
+  // (bitta chat ichidagi tartib `sequentialize` bilan saqlanadi).
+  await bot.api.deleteWebhook({ drop_pending_updates: !isProd });
+  await bot.init();
+  const polling = superviseRunner();
 
   startWorkers();
 
@@ -149,7 +198,7 @@ async function main(): Promise<void> {
     stopWorkers();
     stopTmpCleanup();
     try {
-      await bot.stop();
+      await polling.stop();
     } catch (e) {
       logger.warn({ err: errMessage(e) }, 'Botni to\'xtatishda xato');
     }

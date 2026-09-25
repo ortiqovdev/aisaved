@@ -77,7 +77,7 @@ const envSchema = z.object({
 
   // Worker
   WORKER_ENABLED: boolish(true),
-  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(2),
+  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(8),
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(500).default(3000),
   WORKER_STALE_LOCK_SECONDS: z.coerce.number().int().min(30).default(300),
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),

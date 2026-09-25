@@ -7,7 +7,9 @@ import { logger } from '../lib/logger.ts';
 import { errMessage } from '../lib/errors.ts';
 import { buildSongMessage } from './results.ts';
 import type { SongInfo } from '../services/audd.ts';
+import type { MediaKind } from '../services/ig-resolver.ts';
 import { isImageContentType, type DownloadedFile } from '../services/media.ts';
+import type { CachedMedia } from '../db/media-cache.repo.ts';
 import { t, type Lang } from '../i18n/index.ts';
 
 /**
@@ -20,10 +22,38 @@ import { t, type Lang } from '../i18n/index.ts';
  * ketadi, karta esa o'chiriladi. Ikkala holatda ham chatda bitta xabar qoladi.
  */
 
-type MediaKind = 'video' | 'photo';
+/**
+ * Yuboriladigan fayl manbasi:
+ *   { url }    — Telegram faylni o'zi yuklab oladi (video ≤20 MB, rasm ≤5 MB):
+ *                serverimiz faylni umuman yuklab olmaydi va qayta yuklamaydi
+ *   { fileId } — Telegram'da allaqachon bor (media keshi): bir zumda
+ *   { path }   — diskdagi fayl (yuklab olingan)
+ */
+export type MediaSource = { url: string } | { fileId: string } | { path: string };
 
-const kindOf = (file: DownloadedFile): MediaKind =>
-  isImageContentType(file.contentType) ? 'photo' : 'video';
+export interface OutMedia {
+  kind: MediaKind;
+  source: MediaSource;
+}
+
+/** Har chaqiruvda yangi InputFile — fayl oqimi bir marta o'qiladi. */
+function inputOf(source: MediaSource): string | InputFile {
+  if ('path' in source) return new InputFile(source.path);
+  return 'url' in source ? source.url : source.fileId;
+}
+
+export const fromDownloaded = (files: DownloadedFile[]): OutMedia[] =>
+  files.map((f) => ({
+    kind: isImageContentType(f.contentType) ? 'photo' : 'video',
+    source: { path: f.filePath },
+  }));
+
+/** Yuborilgan xabardagi fayl — media keshi uchun. */
+function cachedOf(message: Message): CachedMedia | null {
+  if (message.video) return { kind: 'video', fileId: message.video.file_id };
+  const photo = message.photo?.at(-1);
+  return photo ? { kind: 'photo', fileId: photo.file_id } : null;
+}
 
 /** Telegram albomida ko'pi bilan 10 ta fayl. */
 const ALBUM_LIMIT = 10;
@@ -32,34 +62,36 @@ const ALBUM_LIMIT = 10;
 async function placeMedia(
   chatId: number,
   statusId: number | null,
-  kind: MediaKind,
-  filePath: string,
+  item: OutMedia,
   caption: string,
   keyboard: InlineKeyboardMarkup,
 ): Promise<Message> {
   if (statusId) {
     const media =
-      kind === 'video'
-        ? InputMediaBuilder.video(new InputFile(filePath), { caption, supports_streaming: true })
-        : InputMediaBuilder.photo(new InputFile(filePath), { caption });
+      item.kind === 'video'
+        ? InputMediaBuilder.video(inputOf(item.source), { caption, supports_streaming: true })
+        : InputMediaBuilder.photo(inputOf(item.source), { caption });
     try {
       const edited = await bot.api.editMessageMedia(chatId, statusId, media, {
         reply_markup: keyboard,
       });
       if (edited !== true) return edited;
     } catch (e) {
+      // URL'ni Telegram ololmagan bo'lsa, yangi xabar ham ketmaydi — xato
+      // yuqoriga chiqadi va chaqiruvchi faylni yuklab olib qayta urinadi.
+      if ('url' in item.source) throw e;
       logger.debug({ chatId, statusId, err: errMessage(e) }, 'Kartani aylantirib bo\'lmadi — yangi xabar');
     }
   }
 
   const sent =
-    kind === 'video'
-      ? await bot.api.sendVideo(chatId, new InputFile(filePath), {
+    item.kind === 'video'
+      ? await bot.api.sendVideo(chatId, inputOf(item.source), {
           caption,
           supports_streaming: true,
           reply_markup: keyboard,
         })
-      : await bot.api.sendPhoto(chatId, new InputFile(filePath), { caption, reply_markup: keyboard });
+      : await bot.api.sendPhoto(chatId, inputOf(item.source), { caption, reply_markup: keyboard });
   await deleteQuietly(chatId, statusId);
   return sent;
 }
@@ -69,60 +101,71 @@ async function deleteQuietly(chatId: number, messageId: number | null): Promise<
 }
 
 /**
- * Yuklab olingan fayl(lar):
+ * Post fayl(lar)i:
  *   1 ta video → tagida "🎵 · ⭕ · 📤" tugmalari
  *   1 ta rasm  → tagida "📤" tugmasi
  *   karusel    → albom (Telegram albomiga tugma qo'yib bo'lmaydi)
+ *
+ * @returns yuborilgan fayllarning Telegram file_id'lari — media keshi uchun
  */
-export async function deliverDownloads(
+export async function deliverMedia(
   chatId: number,
-  files: DownloadedFile[],
+  items: OutMedia[],
   lang: Lang,
   statusId: number | null,
-): Promise<void> {
-  const [single] = files;
-  if (files.length === 1 && single) {
-    await deliverSingle(chatId, single, lang, statusId);
-    return;
+): Promise<CachedMedia[]> {
+  const [single] = items;
+  if (items.length === 1 && single) {
+    const sent = await deliverSingle(chatId, single, lang, statusId);
+    return sent ? [sent] : [];
   }
 
-  for (let i = 0; i < files.length; i += ALBUM_LIMIT) {
-    const chunk = files.slice(i, i + ALBUM_LIMIT).map((file, j) => {
-      const caption = i === 0 && j === 0 ? { caption: t(lang, 'albumReadyCaption', { n: files.length }) } : {};
-      return kindOf(file) === 'video'
-        ? InputMediaBuilder.video(new InputFile(file.filePath), { supports_streaming: true, ...caption })
-        : InputMediaBuilder.photo(new InputFile(file.filePath), caption);
+  const delivered: CachedMedia[] = [];
+  for (let i = 0; i < items.length; i += ALBUM_LIMIT) {
+    const chunk = items.slice(i, i + ALBUM_LIMIT).map((item, j) => {
+      const caption =
+        i === 0 && j === 0 ? { caption: t(lang, 'albumReadyCaption', { n: items.length }) } : {};
+      return item.kind === 'video'
+        ? InputMediaBuilder.video(inputOf(item.source), { supports_streaming: true, ...caption })
+        : InputMediaBuilder.photo(inputOf(item.source), caption);
     });
-    await bot.api.sendMediaGroup(chatId, chunk);
+    const messages = await bot.api.sendMediaGroup(chatId, chunk);
+    for (const m of messages) {
+      const c = cachedOf(m);
+      if (c) delivered.push(c);
+    }
   }
   await deleteQuietly(chatId, statusId);
-  logger.info({ chatId, files: files.length }, 'Albom Telegram\'ga yuborildi');
+  logger.info({ chatId, files: items.length }, 'Albom Telegram\'ga yuborildi');
+  return delivered;
 }
 
 async function deliverSingle(
   chatId: number,
-  file: DownloadedFile,
+  item: OutMedia,
   lang: Lang,
   statusId: number | null,
-): Promise<void> {
-  const kind = kindOf(file);
-  const caption = t(lang, kind === 'video' ? 'videoReadyCaption' : 'photoReadyCaption');
+): Promise<CachedMedia | null> {
+  const caption = t(lang, item.kind === 'video' ? 'videoReadyCaption' : 'photoReadyCaption');
   const keyboardFor = (fileId: string | null) =>
-    kind === 'video' ? videoActionsKeyboard(lang, fileId) : photoActionsKeyboard(lang, fileId);
+    item.kind === 'video' ? videoActionsKeyboard(lang, fileId) : photoActionsKeyboard(lang, fileId);
 
-  const message = await placeMedia(chatId, statusId, kind, file.filePath, caption, keyboardFor(null));
+  // Keshdan kelgan bo'lsa file_id oldindan ma'lum — "📤" darhol to'liq
+  const knownId = 'fileId' in item.source ? item.source.fileId : null;
+  const message = await placeMedia(chatId, statusId, item, caption, keyboardFor(knownId));
+  const sent = cachedOf(message);
 
-  // Inline ulashish uchun faylning file_id si kerak — u faqat yuborilgach
-  // ma'lum bo'ladi, shuning uchun "📤" tugmasi ikkinchi qadamda yangilanadi.
-  const fileId = message.video?.file_id ?? message.photo?.at(-1)?.file_id ?? null;
-  if (getBotInfo().supportsInline && fileId) {
+  // Inline ulashish uchun faylning file_id si kerak — yangi fayl bo'lsa u
+  // faqat yuborilgach ma'lum bo'ladi, shuning uchun "📤" ikkinchi qadamda.
+  if (!knownId && getBotInfo().supportsInline && sent) {
     await bot.api
-      .editMessageReplyMarkup(chatId, message.message_id, { reply_markup: keyboardFor(fileId) })
+      .editMessageReplyMarkup(chatId, message.message_id, { reply_markup: keyboardFor(sent.fileId) })
       .catch((e: unknown) =>
         logger.debug({ err: errMessage(e) }, 'Ulashish tugmasini qo\'shib bo\'lmadi'),
       );
   }
-  logger.info({ chatId, kind }, 'Fayl Telegram\'ga yuborildi');
+  logger.info({ chatId, kind: item.kind, via: Object.keys(item.source)[0] }, 'Fayl Telegram\'ga yuborildi');
+  return sent;
 }
 
 /**

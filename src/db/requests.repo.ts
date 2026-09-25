@@ -3,7 +3,7 @@ import type { RequestRow } from './types.ts';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 
-interface EnqueueInput {
+export interface EnqueueInput {
   userId: number;
   igMessageId: string | null;
   mediaUrl: string;
@@ -45,6 +45,48 @@ export async function enqueue(input: EnqueueInput): Promise<RequestRow | null> {
     throw new Error(`Navbatga qo'shishda xato: ${error.message}`);
   }
   return data;
+}
+
+export type EnqueueResult =
+  | { status: 'queued'; row: Pick<RequestRow, 'id'> }
+  | { status: 'limit'; pending: number }
+  | { status: 'duplicate' };
+
+/** 0005 dagi `enqueue_request()` bormi — birinchi chaqiruvda aniqlanadi. */
+let fastEnqueue: boolean | null = null;
+
+/**
+ * Limit tekshiruvi + navbatga qo'yish. 0005 migratsiyasi bo'lsa — BITTA
+ * so'rov (RPC), bo'lmasa eski yo'l: sanash + insert (ikki so'rov).
+ */
+export async function enqueueWithLimit(input: EnqueueInput): Promise<EnqueueResult> {
+  if (fastEnqueue !== false) {
+    const { data, error } = await supabase.rpc('enqueue_request', {
+      p_user_id: input.userId,
+      p_ig_message_id: input.igMessageId,
+      p_media_url: input.mediaUrl,
+      p_media_type: input.mediaType,
+      p_file_unique_id: input.fileUniqueId ?? null,
+      p_status_message_id: input.statusMessageId ?? null,
+      p_max_pending: env.MAX_PENDING_PER_USER,
+    });
+    if (!error) {
+      fastEnqueue = true;
+      const r = data as { status: string; id?: number; pending?: number };
+      if (r.status === 'limit') return { status: 'limit', pending: r.pending ?? 0 };
+      if (r.status === 'duplicate') return { status: 'duplicate' };
+      return { status: 'queued', row: { id: Number(r.id) } };
+    }
+    // PGRST202 — funksiya yo'q (0005 qo'llanmagan): eski yo'lga o'tamiz
+    if (error.code !== 'PGRST202') throw new Error(`enqueue_request xatosi: ${error.message}`);
+    fastEnqueue = false;
+    logger.warn('0005 migratsiyasi QO\'LLANMAGAN — navbatga qo\'yish sekinroq yo\'l bilan');
+  }
+
+  const pending = await pendingCountForUser(input.userId);
+  if (pending >= env.MAX_PENDING_PER_USER) return { status: 'limit', pending };
+  const row = await enqueue(input);
+  return row ? { status: 'queued', row } : { status: 'duplicate' };
 }
 
 /**
@@ -130,6 +172,29 @@ export async function markDone(
       locked_at: null,
       locked_by: null,
       completed_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  if (error) throw new Error(`Jobni 'done' qilishda xato: ${error.message}`);
+}
+
+/**
+ * Natija yuborildi va job tugadi — `markSent` + `markDone` BITTA so'rovda.
+ * Bu yozuv yiqilsa job qayta olinib natija ikkinchi marta ketishi mumkin,
+ * lekin bu kamdan-kam holat, tejalgan so'rov esa har bir jobda.
+ */
+export async function markDelivered(id: number, patch: SongResultPatch): Promise<void> {
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('requests')
+    .update({
+      ...patch,
+      ...(hasMigration0002() ? { sent_at: now } : {}),
+      video_file_path: null,
+      status: 'done',
+      error_message: null,
+      locked_at: null,
+      locked_by: null,
+      completed_at: now,
     })
     .eq('id', id);
   if (error) throw new Error(`Jobni 'done' qilishda xato: ${error.message}`);

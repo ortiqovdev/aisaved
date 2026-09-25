@@ -87,20 +87,21 @@ for (const [code, want, desc] of [
 ]) {
   try {
     const r = await R(code);
-    const got = r.urls[0] ?? '';
-    ok(`${code}: ${desc}`, r.urls.length === 1 && (code === 'D' ? got.includes('cdninstagram') : got === want), `oldi: ${JSON.stringify(r.urls)}`);
+    const got = r.items[0]?.url ?? '';
+    ok(`${code}: ${desc}`, r.items.length === 1 && r.items[0].kind === 'video' && (code === 'D' ? got.includes('cdninstagram') : got === want), `oldi: ${JSON.stringify(r.items)}`);
   } catch (e) { ok(`${code}: ${desc}`, false, `xato: ${e.message}`); }
 }
 
 console.log('\n=== 2b) Rasm va karusel postlar ===');
 for (const [code, want, desc] of [
-  ['H', ['https://cdn.example.com/1.jpg', 'https://cdn.example.com/2.mp4', 'https://cdn.example.com/3.jpg'], 'karusel: 3 ta fayl, tartib saqlangan'],
-  ['I', ['https://cdn.example.com/hd.mp4'], 'sifat variantlari — bitta video (dublikat yo\'q)'],
-  ['J', ['https://cdn.example.com/photo.jpg'], 'bitta rasm, muqova (thumb) emas'],
+  ['H', ['photo https://cdn.example.com/1.jpg', 'video https://cdn.example.com/2.mp4', 'photo https://cdn.example.com/3.jpg'], 'karusel: 3 ta fayl, tartib va turlar saqlangan'],
+  ['I', ['video https://cdn.example.com/hd.mp4'], 'sifat variantlari — bitta video (dublikat yo\'q)'],
+  ['J', ['photo https://cdn.example.com/photo.jpg'], 'bitta rasm, muqova (thumb) emas'],
 ]) {
   try {
     const r = await R(code);
-    ok(`${code}: ${desc}`, JSON.stringify(r.urls) === JSON.stringify(want), `oldi: ${JSON.stringify(r.urls)}`);
+    const got = r.items.map((i) => `${i.kind} ${i.url}`);
+    ok(`${code}: ${desc}`, JSON.stringify(got) === JSON.stringify(want), `oldi: ${JSON.stringify(got)}`);
   } catch (e) { ok(`${code}: ${desc}`, false, `xato: ${e.message}`); }
 }
 try {

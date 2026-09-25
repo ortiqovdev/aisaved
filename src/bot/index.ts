@@ -1,4 +1,5 @@
 import { Bot, type Context, GrammyError, HttpError, InlineKeyboard, InputFile } from 'grammy';
+import { sequentialize } from '@grammyjs/runner';
 import type { Message } from 'grammy/types';
 import { getTrack } from '../services/deezer.ts';
 import { downloadMedia, safeUnlink } from '../services/media.ts';
@@ -28,7 +29,16 @@ import {
 } from '../i18n/index.ts';
 import { changeLang, resolveTelegramLang } from '../i18n/user-lang.ts';
 import { handleRound } from './round.ts';
-import { dropStatusCard, rememberStatusCard, sendStatusCard } from './status-card.ts';
+import {
+  dropStatusCard,
+  rememberStatusCard,
+  sendStatusCard,
+  setStatusCardText,
+} from './status-card.ts';
+import { deliverMedia, type OutMedia } from './notify.ts';
+import { dropMediaCache, peekMediaCache } from '../db/media-cache.repo.ts';
+import type { EnqueueInput } from '../db/requests.repo.ts';
+import { wakeWorkers } from '../workers/wake.ts';
 import {
   ROUND_ACTION,
   SONG_ACTION,
@@ -51,6 +61,13 @@ export type BotContext = Context & {
 };
 
 export const bot = new Bot<BotContext>(env.TELEGRAM_BOT_TOKEN);
+
+/**
+ * Update'lar parallel qayta ishlanadi (@grammyjs/runner, src/index.ts), lekin
+ * BITTA chat ichida — tartib bilan: /language dan keyingi xabar yangi tilda
+ * chiqsin, bir foydalanuvchining ikki havolasi aralashib ketmasin.
+ */
+bot.use(sequentialize((ctx: Context) => (ctx.chat?.id ?? ctx.from?.id)?.toString()));
 
 bot.use(async (ctx, next) => {
   ctx.lang = ctx.from
@@ -276,45 +293,66 @@ bot.on(
       return;
     }
 
-    const user = await usersRepo.getOrCreateByTelegramId({
-      telegramId: from.id,
-      username: from.username,
-      firstName: from.first_name,
-      language: ctx.lang,
-    });
-
-    // Spam himoyasi: bitta foydalanuvchi navbatni to'ldirib, AudD limitini
-    // (va boshqalarning navbatini) yeb qo'ymasligi uchun.
-    const pending = await requestsRepo.pendingCountForUser(user.id);
-    if (pending >= env.MAX_PENDING_PER_USER) {
-      await ctx.reply(ctx.t('pendingLimit', { n: pending }));
-      return;
-    }
-
-    const statusId = await openStatusCard(ctx, 'mediaQueued');
-    const row = await requestsRepo.enqueue({
-      userId: user.id,
+    const requestId = await queueWithCard(ctx, 'mediaQueued', {
       // Bir xil xabar ikki marta qayta ishlanmasligi uchun (unique constraint)
       igMessageId: `tg:${ctx.chat.id}:${ctx.message.message_id}`,
       // Bazada URL emas, file_id saqlanadi — URL ichida bot tokeni bo'ladi
       mediaUrl: media.fileId,
       mediaType: TELEGRAM_SOURCE,
       fileUniqueId: media.fileUniqueId,
-      statusMessageId: statusId,
     });
-
-    if (!row) {
-      await dropStatusCard(ctx.chat.id, statusId); // dublikat
-      return;
+    if (requestId) {
+      logger.info({ requestId, telegramId: from.id, kind: media.kind }, 'Telegram\'dan media navbatga qo\'shildi');
     }
-    if (statusId) rememberStatusCard(row.id, statusId);
-
-    logger.info(
-      { requestId: row.id, telegramId: from.id, kind: media.kind },
-      'Telegram\'dan media navbatga qo\'shildi',
-    );
   },
 );
+
+/**
+ * Kartani ko'rsatadi va jobni navbatga qo'yadi — tezlik uchun tartib muhim:
+ *
+ *   1. "⏳ Qabul qilindi" kartasi — foydalanuvchi uni DARHOL ko'radi
+ *      (bazaga murojaatdan oldin; Supabase'gacha bitta so'rov ~0.5 s)
+ *   2. user id — xotiradagi keshdan (odatda bazaga bormaydi)
+ *   3. limit tekshiruvi + navbat — BITTA so'rov (0005: enqueue_request)
+ *   4. worker'ni uyg'otish — 3 soniyalik tekshiruvni kutmaydi
+ *
+ * @returns job id; limit yoki dublikat bo'lsa null
+ */
+async function queueWithCard(
+  ctx: BotContext,
+  key: MsgKey,
+  job: Omit<EnqueueInput, 'userId' | 'statusMessageId'>,
+): Promise<number | null> {
+  const from = ctx.from;
+  const chat = ctx.chat;
+  if (!from || !chat) return null;
+
+  const statusId = await openStatusCard(ctx, key);
+  const userId = await usersRepo.userIdFor({
+    telegramId: from.id,
+    username: from.username,
+    firstName: from.first_name,
+    language: ctx.lang,
+  });
+
+  // Spam himoyasi: bitta foydalanuvchi navbatni to'ldirib, limitlarni
+  // (va boshqalarning navbatini) yeb qo'ymasligi uchun.
+  const result = await requestsRepo.enqueueWithLimit({ ...job, userId, statusMessageId: statusId });
+  if (result.status === 'limit') {
+    const text = ctx.t('pendingLimit', { n: result.pending });
+    if (statusId) await setStatusCardText(chat.id, statusId, text);
+    else await ctx.reply(text);
+    return null;
+  }
+  if (result.status === 'duplicate') {
+    await dropStatusCard(chat.id, statusId);
+    return null;
+  }
+
+  if (statusId) rememberStatusCard(result.row.id, statusId);
+  wakeWorkers();
+  return result.row.id;
+}
 
 /**
  * "⏳ Qabul qilindi" kartasi — natija keyin shu xabarning o'rniga chiqadi.
@@ -354,41 +392,34 @@ async function handleInstagramLink(ctx: BotContext, link: ParsedLink): Promise<v
     return;
   }
 
-  const user = await usersRepo.getOrCreateByTelegramId({
-    telegramId: from.id,
-    username: from.username,
-    firstName: from.first_name,
-    language: ctx.lang,
-  });
-
-  const pending = await requestsRepo.pendingCountForUser(user.id);
-  if (pending >= env.MAX_PENDING_PER_USER) {
-    await ctx.reply(ctx.t('pendingLimit', { n: pending }));
-    return;
+  // Eng tez yo'l: bu post yaqinda yuborilgan — xotiradagi keshdan, navbat va
+  // kartasiz, bazaga ham bormasdan bir zumda. Ishlamasa odatdagi yo'l.
+  const cached = peekMediaCache(link.shortcode);
+  if (cached) {
+    try {
+      const items: OutMedia[] = cached.map((c) => ({ kind: c.kind, source: { fileId: c.fileId } }));
+      await deliverMedia(chat.id, items, ctx.lang, null);
+      logger.info({ telegramId: from.id, shortcode: link.shortcode }, 'Post xotiradagi keshdan yuborildi');
+      return;
+    } catch (e) {
+      logger.warn({ shortcode: link.shortcode, err: errMessage(e) }, 'Keshdagi file_id ishlamadi');
+      await dropMediaCache(link.shortcode);
+    }
   }
 
-  const statusId = await openStatusCard(ctx, 'linkQueued');
-  const row = await requestsRepo.enqueue({
-    userId: user.id,
+  const requestId = await queueWithCard(ctx, 'linkQueued', {
     igMessageId: `tg:${chat.id}:${message.message_id}`,
     mediaUrl: link.url,
     mediaType: IG_LINK_SOURCE,
-    // Shortcode doimiy — ayni havola qayta yuborilsa natija keshdan olinadi
-    // va resolver ham, AudD ham bezovta qilinmaydi.
+    // Shortcode doimiy — media keshi va musiqa keshining kaliti
     fileUniqueId: `ig:${link.shortcode}`,
-    statusMessageId: statusId,
   });
-
-  if (!row) {
-    await dropStatusCard(chat.id, statusId); // dublikat
-    return;
+  if (requestId) {
+    logger.info(
+      { requestId, telegramId: from.id, shortcode: link.shortcode, kind: link.kind },
+      'Instagram havolasi navbatga qo\'shildi',
+    );
   }
-  if (statusId) rememberStatusCard(row.id, statusId);
-
-  logger.info(
-    { requestId: row.id, telegramId: from.id, shortcode: link.shortcode, kind: link.kind },
-    'Instagram havolasi navbatga qo\'shildi',
-  );
 }
 
 // Boshqa har qanday matn

@@ -21,6 +21,7 @@ import { isResolverConfigured, parseInstagramLink } from '../services/ig-resolve
 import { IG_LINK_SOURCE } from '../lib/constants.ts';
 import { trySendText } from '../bot/notify.ts';
 import { rememberStatusCard, sendStatusCard } from '../bot/status-card.ts';
+import { wakeWorkers } from '../workers/wake.ts';
 import { escapeHtml, unsupportedReplyKey } from '../bot/messages.ts';
 import { t } from '../i18n/index.ts';
 import { langOfUser } from '../i18n/user-lang.ts';
@@ -256,27 +257,28 @@ async function handleMedia(
     return;
   }
 
-  // Spam himoyasi — bitta akkaunt navbatni va AudD limitini yeb qo'ymasin
-  const pending = await requestsRepo.pendingCountForUser(user.id);
-  if (pending >= env.MAX_PENDING_PER_USER) {
-    logger.info({ userId: user.id, pending }, 'Foydalanuvchi navbat limitiga yetdi');
-    await react(igScopedId, event, false);
-    await trySendText(user.telegram_id, t(lang, 'igPendingLimit', { n: pending }));
-    return;
-  }
-
-  const row = await requestsRepo.enqueue({
+  // Spam himoyasi + navbat — bitta so'rovda (0005). Media keshi shu yerda
+  // emas, worker'da tekshiriladi: Meta webhook'ni qayta yuborsa, dublikatni
+  // faqat navbat ushlaydi — keshdan to'g'ridan-to'g'ri yuborsak ikki marta ketardi.
+  const result = await requestsRepo.enqueueWithLimit({
     userId: user.id,
     igMessageId: event.message?.mid ?? null,
     // Havola bo'lsa kanonik ko'rinishini saqlaymiz — worker uni resolver
     // orqali yechadi; CDN havolasi bo'lsa o'zini (u darhol yuklanadi).
     mediaUrl: link ? link.url : media.url,
     mediaType: link ? IG_LINK_SOURCE : media.type,
-    // Shortcode doimiy: ayni reels qayta yuborilsa musiqa keshdan olinadi
+    // Shortcode doimiy — media keshi va musiqa keshining kaliti
     ...(link ? { fileUniqueId: `ig:${link.shortcode}` } : {}),
   });
 
-  if (!row) return; // dublikat webhook — javob ham takrorlanmasin
+  if (result.status === 'limit') {
+    logger.info({ userId: user.id, pending: result.pending }, 'Foydalanuvchi navbat limitiga yetdi');
+    await react(igScopedId, event, false);
+    await trySendText(user.telegram_id, t(lang, 'igPendingLimit', { n: result.pending }));
+    return;
+  }
+  if (result.status === 'duplicate') return; // dublikat webhook — javob ham takrorlanmasin
+  const row = result.row;
 
   logger.info(
     { requestId: row.id, userId: user.id, mediaType: media.type, viaResolver },
@@ -293,4 +295,7 @@ async function handleMedia(
       logger.debug({ err: errMessage(e) }, 'status_message_id saqlanmadi (xotirada bor)'),
     );
   }
+  // Karta saqlangandan KEYIN uyg'otamiz — aks holda tez worker kartani
+  // topmay natijani yangi xabar qilib yuborardi
+  wakeWorkers();
 }

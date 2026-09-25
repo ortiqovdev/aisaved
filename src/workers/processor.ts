@@ -17,7 +17,11 @@ import {
 } from '../services/media.ts';
 import { identifySong, type SongInfo } from '../services/audd.ts';
 import { resolveTelegramFileUrl } from '../services/telegram-files.ts';
-import { resolveInstagramMedia } from '../services/ig-resolver.ts';
+import {
+  resolveInstagramMedia,
+  type MediaKind,
+  type ResolvedItem,
+} from '../services/ig-resolver.ts';
 import {
   IG_REACTION,
   instagramMessageIdOf,
@@ -25,9 +29,15 @@ import {
   type IgReaction,
 } from '../services/instagram.ts';
 import { IG_LINK_SOURCE, TELEGRAM_SOURCE } from '../lib/constants.ts';
-import { msg } from '../i18n/index.ts';
+import { msg, type Lang } from '../i18n/index.ts';
 import { langOfUser } from '../i18n/user-lang.ts';
-import { deliverDownloads, deliverSong } from '../bot/notify.ts';
+import { deliverMedia, deliverSong, fromDownloaded, type OutMedia } from '../bot/notify.ts';
+import {
+  dropMediaCache,
+  getMediaCache,
+  putMediaCache,
+  type CachedMedia,
+} from '../db/media-cache.repo.ts';
 import { forgetStatusCard, statusCardOf } from '../bot/status-card.ts';
 
 /**
@@ -39,7 +49,7 @@ import { forgetStatusCard, statusCardOf } from '../bot/status-card.ts';
 export async function processRequest(job: RequestRow): Promise<void> {
   const log = logger.child({ requestId: job.id, attempt: job.attempts });
 
-  const user = await usersRepo.findById(job.user_id);
+  const user = await usersRepo.findByIdCached(job.user_id);
   if (!user) {
     throw new PermanentError(`user_id=${job.user_id} topilmadi`);
   }
@@ -96,9 +106,7 @@ export async function processRequest(job: RequestRow): Promise<void> {
         deliverSong(user.telegram_id, cached, lang, statusId, replyTo),
       );
       forgetStatusCard(job.id);
-      await requestsRepo.markSent(job.id);
-      await requestsRepo.markDone(job.id, {
-        video_file_path: null,
+      await requestsRepo.markDelivered(job.id, {
         song_title: cached.title,
         song_artist: cached.artist,
         song_album: cached.album,
@@ -123,23 +131,13 @@ export async function processRequest(job: RequestRow): Promise<void> {
         deliverSong(user.telegram_id, song, lang, statusId, replyTo),
       );
     } else {
-      // 1-3) Yuklab olish: bitta video/rasm yoki butun karusel
-      const files = await downloadPostFiles(job, fromLink, log);
-      tempFiles.push(...files.map((f) => f.filePath));
-
-      const statusId = await statusCardOf(job.id);
-      await withTelegramErrors(() => deliverDownloads(user.telegram_id, files, lang, statusId));
+      // 1-3) Post: bitta video/rasm yoki butun karusel
+      await deliverPost(job, user.telegram_id, lang, fromLink, log, tempFiles);
     }
     forgetStatusCard(job.id);
 
-    // 5) Yuborilgani belgilanadi — keyingi qadam yiqilsa ham takror yuborilmaydi
-    await requestsRepo.markSent(job.id);
-
-    // 6) Bazaga yozish
-    await requestsRepo.markDone(job.id, {
-      // Fayl vaqtinchalik — yuborilgach o'chiriladi, shuning uchun bazada
-      // o'lik yo'lni saqlamaymiz.
-      video_file_path: null,
+    // 4) Yuborildi + tugadi — bitta so'rov bilan
+    await requestsRepo.markDelivered(job.id, {
       song_title: song?.title ?? null,
       song_artist: song?.artist ?? null,
       song_album: song?.album ?? null,
@@ -156,29 +154,100 @@ export async function processRequest(job: RequestRow): Promise<void> {
   }
 }
 
+/** `ig:<shortcode>` → shortcode (media keshi kaliti). CDN job'larida yo'q. */
+function shortcodeOf(job: RequestRow): string | null {
+  return job.file_unique_id?.startsWith('ig:') ? job.file_unique_id.slice(3) : null;
+}
+
+/** Webhookdagi CDN havolasi turi: reels/video — video; post/share — noma'lum. */
+function kindOfJob(mediaType: string | null): MediaKind | null {
+  return mediaType === 'ig_reel' || mediaType === 'reel' || mediaType === 'video' ? 'video' : null;
+}
+
 /**
- * Postdagi fayllarni yuklab oladi.
- *   ig_link → resolver butun postni beradi (reels: 1 ta, karusel: bir nechta)
- *   ig_reel / ig_post / ... → webhookdagi bitta CDN havolasi (~7 kun amal qiladi)
+ * Postni yetkazadi — eng tezidan boshlab:
  *
- * Karuselda bitta fayl doimiy xato bersa (o'chirilgan, format) — qolganlari
- * baribir yuboriladi. Vaqtinchalik xatoda esa butun job qayta urinadi.
+ *   1. Media keshi — bu post avval yuborilgan: Telegram file_id orqali bir
+ *      zumda; RapidAPI ham, yuklab olish ham yo'q.
+ *   2. URL orqali — Telegram faylni Instagram CDN'dan o'zi oladi (video ≤20 MB,
+ *      rasm ≤5 MB). Serverimiz faylni yuklab olmaydi va qayta yuklamaydi.
+ *   3. Yuklab olib yuborish — URL ishlamasa (katta fayl, turi noma'lum,
+ *      CDN Telegram'ni kiritmadi).
+ *
+ * Yuborilgan fayllarning file_id'lari keshga yoziladi.
  */
-async function downloadPostFiles(
+async function deliverPost(
   job: RequestRow,
+  chatId: number,
+  lang: Lang,
   fromLink: boolean,
   log: Logger,
-): Promise<DownloadedFile[]> {
-  let urls = [job.media_url];
+  tempFiles: string[],
+): Promise<void> {
+  const shortcode = shortcodeOf(job);
+
+  // 1) Kesh
+  if (shortcode) {
+    const cached = await getMediaCache(shortcode);
+    if (cached) {
+      try {
+        const items: OutMedia[] = cached.map((c) => ({ kind: c.kind, source: { fileId: c.fileId } }));
+        await deliverMedia(chatId, items, lang, await statusCardOf(job.id));
+        log.info({ shortcode }, 'Post keshdan yuborildi (RapidAPI chaqirilmadi)');
+        return;
+      } catch (e) {
+        if (!canFallBack(e)) throw toJobError(e);
+        log.warn({ shortcode, err: errMessage(e) }, 'Keshdagi file_id ishlamadi — kesh tozalanadi');
+        await dropMediaCache(shortcode);
+      }
+    }
+  }
+
+  let items: ResolvedItem[] = [{ url: job.media_url, kind: kindOfJob(job.media_type) }];
   if (fromLink) {
     const resolved = await resolveInstagramMedia(job.media_url);
     log.info(
-      { files: resolved.urls.length, title: resolved.title, author: resolved.author },
+      { files: resolved.items.length, title: resolved.title, author: resolved.author },
       'Havoladan post topildi',
     );
-    urls = resolved.urls;
+    items = resolved.items;
   }
 
+  // 2) URL orqali — turi hamma fayl uchun ma'lum bo'lsagina
+  let delivered: CachedMedia[] | null = null;
+  if (items.every((i) => i.kind !== null)) {
+    try {
+      const out: OutMedia[] = items.map((i) => ({ kind: i.kind!, source: { url: i.url } }));
+      delivered = await deliverMedia(chatId, out, lang, await statusCardOf(job.id));
+    } catch (e) {
+      if (!canFallBack(e)) throw toJobError(e);
+      log.info({ err: errMessage(e) }, 'URL orqali ketmadi — yuklab olib yuboramiz');
+    }
+  }
+
+  // 3) Yuklab olib yuborish
+  if (!delivered) {
+    const files = await downloadItems(items.map((i) => i.url), job, log);
+    tempFiles.push(...files.map((f) => f.filePath));
+    const statusId = await statusCardOf(job.id);
+    delivered = await withTelegramErrors(() =>
+      deliverMedia(chatId, fromDownloaded(files), lang, statusId),
+    );
+  }
+
+  if (shortcode && delivered.length > 0) await putMediaCache(shortcode, delivered);
+}
+
+/**
+ * Fayllarni yuklab oladi. Karuselda bitta fayl doimiy xato bersa (o'chirilgan,
+ * format) — qolganlari baribir yuboriladi. Vaqtinchalik xatoda esa butun job
+ * qayta urinadi.
+ */
+async function downloadItems(
+  urls: string[],
+  job: RequestRow,
+  log: Logger,
+): Promise<DownloadedFile[]> {
   const files: DownloadedFile[] = [];
   let firstError: unknown = null;
   for (const url of urls) {
@@ -328,29 +397,41 @@ async function identifyWithFallback(
 }
 
 /** Telegram xatolarini retry-qilinadigan / qilinmaydiganga ajratadi. */
-async function withTelegramErrors(send: () => Promise<void>): Promise<void> {
+async function withTelegramErrors<T>(send: () => Promise<T>): Promise<T> {
   try {
-    await send();
+    return await send();
   } catch (e) {
-    if (e instanceof GrammyError) {
-      // 403 — user botni bloklagan yoki chatni o'chirgan: qayta urinish foydasiz
-      if (e.error_code === 403) {
-        throw new PermanentError(`Telegram 403: ${e.description}`);
-      }
-      // 413 / "file is too big"
-      if (e.error_code === 413 || /too big|too large/i.test(e.description)) {
-        throw new PermanentError(
-          `Telegram fayl hajmi limiti: ${e.description}`,
-          msg('errTooBigForTelegram'),
-        );
-      }
-      // 429 — flood control
-      if (e.error_code === 429) {
-        const retryAfter = (e.parameters?.retry_after ?? 30) * 1000;
-        throw new TransientError(`Telegram 429: ${e.description}`, retryAfter);
-      }
-      throw new TransientError(`Telegram ${e.error_code}: ${e.description}`);
-    }
-    throw new TransientError(`Telegram'ga yuborishda xato: ${errMessage(e)}`);
+    throw toJobError(e);
   }
+}
+
+function toJobError(e: unknown): Error {
+  if (e instanceof GrammyError) {
+    // 403 — user botni bloklagan yoki chatni o'chirgan: qayta urinish foydasiz
+    if (e.error_code === 403) {
+      return new PermanentError(`Telegram 403: ${e.description}`);
+    }
+    // 413 / "file is too big"
+    if (e.error_code === 413 || /too big|too large/i.test(e.description)) {
+      return new PermanentError(
+        `Telegram fayl hajmi limiti: ${e.description}`,
+        msg('errTooBigForTelegram'),
+      );
+    }
+    // 429 — flood control
+    if (e.error_code === 429) {
+      const retryAfter = (e.parameters?.retry_after ?? 30) * 1000;
+      return new TransientError(`Telegram 429: ${e.description}`, retryAfter);
+    }
+    return new TransientError(`Telegram ${e.error_code}: ${e.description}`);
+  }
+  return new TransientError(`Telegram'ga yuborishda xato: ${errMessage(e)}`);
+}
+
+/**
+ * Tezkor urinish (kesh yoki URL) yiqilganda keyingi usulga o'tish mumkinmi?
+ * Flood limit yoki bloklangan bot — hech bir usul ishlamaydi, darhol chiqamiz.
+ */
+function canFallBack(e: unknown): boolean {
+  return !(e instanceof GrammyError && (e.error_code === 429 || e.error_code === 403));
 }

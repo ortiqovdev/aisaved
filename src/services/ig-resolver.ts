@@ -20,14 +20,22 @@ import { msg } from '../i18n/index.ts';
  * Sozlanmagan bo'lsa — tushunarli xato qaytaradi, ilova qulamaydi.
  */
 
+export type MediaKind = 'video' | 'photo';
+
+export interface ResolvedItem {
+  /** To'g'ridan-to'g'ri yuklab olinadigan fayl havolasi. */
+  url: string;
+  /**
+   * Provayder aytgan tur. null — noma'lum: bunday faylni Telegram'ga URL
+   * orqali berib bo'lmaydi, yuklab olib `content-type` bo'yicha aniqlanadi.
+   */
+  kind: MediaKind | null;
+}
+
 /** Havoladan ajratilgan media. */
 export interface ResolvedMedia {
-  /**
-   * To'g'ridan-to'g'ri yuklab olinadigan fayllar, postdagi tartibda.
-   * Reels — bitta video; karusel — bir nechta rasm/video. Rasm yoki video
-   * ekani yuklab olinganda `content-type` bo'yicha aniqlanadi.
-   */
-  urls: string[];
+  /** Postdagi fayllar, tartibi saqlangan: reels — bitta, karusel — bir nechta. */
+  items: ResolvedItem[];
   title: string | null;
   author: string | null;
 }
@@ -173,8 +181,8 @@ export async function resolveInstagramMedia(link: string): Promise<ResolvedMedia
     throw new TransientError(`Resolver javobini o'qib bo'lmadi: ${errMessage(e)}`);
   }
 
-  const urls = extractMediaUrls(json);
-  if (urls.length === 0) {
+  const items = extractMediaItems(json);
+  if (items.length === 0) {
     logger.warn(
       { link, sample: JSON.stringify(json).slice(0, 400) },
       'Resolver javobida media havolasi topilmadi',
@@ -186,7 +194,7 @@ export async function resolveInstagramMedia(link: string): Promise<ResolvedMedia
   }
 
   return {
-    urls,
+    items,
     title: pickString(json, env.IG_RESOLVER_TITLE_PATH, ['title', 'caption', 'description']),
     author: pickString(json, '', ['author', 'username', 'owner', 'author_name']),
   };
@@ -227,10 +235,12 @@ function itemUrl(item: Record<string, unknown>): string | null {
  * aniq turi (image/video) ko'rsatilgan bo'lsa qabul qilinadi. Aks holda eski,
  * xavfsiz yo'l: bitta video.
  */
-function extractMediaUrls(root: unknown): string[] {
-  // 1) `.env` da aniq yo'l ko'rsatilgan bo'lsa — o'sha
+function extractMediaItems(root: unknown): ResolvedItem[] {
+  // 1) `.env` da aniq yo'l ko'rsatilgan bo'lsa — o'sha (u video yo'li)
   const configured = valueAtPath(root, env.IG_RESOLVER_VIDEO_PATH);
-  if (typeof configured === 'string' && /^https?:\/\//i.test(configured)) return [configured];
+  if (typeof configured === 'string' && /^https?:\/\//i.test(configured)) {
+    return [{ url: configured, kind: 'video' }];
+  }
 
   // 2) Turi ko'rsatilgan elementlar ro'yxati (kenglik bo'yicha — eng tashqisi)
   const queue: Array<{ node: unknown; depth: number }> = [{ node: root, depth: 0 }];
@@ -244,8 +254,15 @@ function extractMediaUrls(root: unknown): string[] {
       );
       const typed = objects.filter((x) => itemType(x) !== null && itemUrl(x) !== null);
       if (typed.length > 0 && typed.length === objects.length) {
-        const urls = [...new Set(typed.map((x) => itemUrl(x)!))];
-        return urls.slice(0, MAX_POST_ITEMS);
+        const seen = new Set<string>();
+        const items: ResolvedItem[] = [];
+        for (const x of typed) {
+          const url = itemUrl(x)!;
+          if (seen.has(url)) continue;
+          seen.add(url);
+          items.push({ url, kind: kindOfType(itemType(x)!) });
+        }
+        return items.slice(0, MAX_POST_ITEMS);
       }
       for (const item of node) queue.push({ node: item, depth: depth + 1 });
       continue;
@@ -260,7 +277,14 @@ function extractMediaUrls(root: unknown): string[] {
 
   // 3) Eski yo'l — bitta video
   const video = extractVideoUrl(root);
-  return video ? [video] : [];
+  return video ? [{ url: video, kind: 'video' }] : [];
+}
+
+/** `image/jpeg`, `photo`, `GraphVideo`, `mp4` ... → tur. */
+function kindOfType(type: string): MediaKind | null {
+  if (/video|mp4/i.test(type)) return 'video';
+  if (/image|photo|jpe?g|png|webp/i.test(type)) return 'photo';
+  return null;
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ import { IG_REACTION } from '../services/instagram.ts';
 import { msg, t } from '../i18n/index.ts';
 import { langOfUser } from '../i18n/user-lang.ts';
 import { processRequest, reactOnInstagram } from './processor.ts';
+import { idle } from './wake.ts';
 
 const WORKER_ID = `${os.hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
 
@@ -66,7 +67,8 @@ async function loop(slot: number): Promise<void> {
     }
 
     if (!job) {
-      await sleep(env.WORKER_POLL_INTERVAL_MS);
+      // Yangi job qo'shilsa bot `wakeWorkers()` bilan darhol uyg'otadi
+      await idle(env.WORKER_POLL_INTERVAL_MS);
       continue;
     }
 
@@ -124,7 +126,7 @@ async function notifyUserOfFailure(job: RequestRow, e: unknown): Promise<void> {
     e instanceof PermanentError && e.userMessage ? e.userMessage : fallback;
 
   try {
-    const user = await usersRepo.findById(job.user_id);
+    const user = await usersRepo.findByIdCached(job.user_id);
     if (user) {
       const text = t(langOfUser(user), userMessage.key, userMessage.vars);
       // "Qabul qilindi" kartasi bo'lsa — yangi xabar emas, kartaning matni xatoga almashadi

@@ -3,13 +3,13 @@ import type { InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo } from 
 import type { BotContext } from './index.ts';
 import { getBotInfo } from './info.ts';
 import { pickVideo, startRound } from './round.ts';
-import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { errMessage } from '../lib/errors.ts';
 import { TELEGRAM_SOURCE } from '../lib/constants.ts';
 import { t, type Lang } from '../i18n/index.ts';
 import * as usersRepo from '../db/users.repo.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
+import { wakeWorkers } from '../workers/wake.ts';
 
 /**
  * Yuklab olingan video tagidagi tugmalar:
@@ -86,21 +86,15 @@ export async function handleFindSongButton(ctx: BotContext): Promise<void> {
     return;
   }
 
-  const user = await usersRepo.getOrCreateByTelegramId({
+  const userId = await usersRepo.userIdFor({
     telegramId: from.id,
     username: from.username,
     firstName: from.first_name,
     language: ctx.lang,
   });
 
-  const pending = await requestsRepo.pendingCountForUser(user.id);
-  if (pending >= env.MAX_PENDING_PER_USER) {
-    await ctx.answerCallbackQuery({ text: ctx.t('pendingLimit', { n: pending }), show_alert: true });
-    return;
-  }
-
-  const row = await requestsRepo.enqueue({
-    userId: user.id,
+  const result = await requestsRepo.enqueueWithLimit({
+    userId,
     // `:song` — shu video uchun bitta so'rov: qayta bosish dublikat bo'ladi
     igMessageId: `tg:${found.message.chat.id}:${found.message.message_id}:song`,
     mediaUrl: found.video.fileId,
@@ -108,8 +102,14 @@ export async function handleFindSongButton(ctx: BotContext): Promise<void> {
     fileUniqueId: found.video.fileUniqueId,
   });
 
-  await ctx.answerCallbackQuery({ text: ctx.t(row ? 'songSearching' : 'songAlreadyRequested') });
-  if (row) logger.info({ requestId: row.id, telegramId: from.id }, 'Tugma orqali qo\'shiq so\'raldi');
+  if (result.status === 'limit') {
+    await ctx.answerCallbackQuery({ text: ctx.t('pendingLimit', { n: result.pending }), show_alert: true });
+    return;
+  }
+  const queued = result.status === 'queued';
+  if (queued) wakeWorkers();
+  await ctx.answerCallbackQuery({ text: ctx.t(queued ? 'songSearching' : 'songAlreadyRequested') });
+  if (queued) logger.info({ requestId: result.row.id, telegramId: from.id }, 'Tugma orqali qo\'shiq so\'raldi');
 }
 
 /** ⭕ — /round bilan bir xil, faqat video bosilgan xabarning o'zi. */

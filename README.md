@@ -117,6 +117,8 @@ Manba kodida importlar `.ts` kengaytmasi bilan yozilgan (`allowImportingTsExtens
    server qayta ishga tushganda Telegram interfeys tiliga qaytadi).
    Va [`supabase/migrations/0004_status_message.sql`](supabase/migrations/0004_status_message.sql) —
    "⏳ Qabul qilindi" kartasi natijaga aylanishi server qayta ishga tushganda ham ishlaydi.
+   Va [`supabase/migrations/0005_speed.sql`](supabase/migrations/0005_speed.sql) — navbatga qo'yish
+   bitta so'rovda va media keshi (bir marta yuborilgan reels keyingi safar RapidAPI'siz, bir zumda).
 4. **Project Settings → API** dan oling:
    - `Project URL` → `.env` dagi `SUPABASE_URL`
    - `service_role` **secret** kalit → `SUPABASE_SERVICE_ROLE_KEY`
@@ -331,6 +333,7 @@ supabase/migrations/0001_init.sql
 supabase/migrations/0002_fixes.sql
 supabase/migrations/0003_user_language.sql
 supabase/migrations/0004_status_message.sql
+supabase/migrations/0005_speed.sql
 ```
 
 ---
