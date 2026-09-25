@@ -17,9 +17,14 @@ import {
   stopTmpCleanup,
 } from './services/media.ts';
 import { startWorkers, stopWorkers } from './workers/index.ts';
+import { bot } from './bot/index.ts';
+import { setBotInfo } from './bot/info.ts';
 
 async function main(): Promise<void> {
   await assertDbReady();
+  // Natija videosi tagidagi "Ulashish" tugmasi bot username'iga tayanadi
+  const me = await bot.api.getMe();
+  setBotInfo({ username: me.username, supportsInline: me.supports_inline_queries });
   await ensureTmpDir();
   await cleanupTmpDir();
   startTmpCleanup();

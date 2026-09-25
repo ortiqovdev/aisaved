@@ -5,10 +5,12 @@ import { errMessage } from '../lib/errors.ts';
 import * as usersRepo from '../db/users.repo.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
 import {
+  IG_REACTION,
   extractVideoAttachment,
   firstAttachmentType,
   flattenEvents,
   trySendInstagramAction,
+  trySendInstagramReaction,
   trySendInstagramText,
   verifyWebhookSignature,
   type ExtractedMedia,
@@ -18,17 +20,16 @@ import {
 import { isResolverConfigured, parseInstagramLink } from '../services/ig-resolver.ts';
 import { IG_LINK_SOURCE } from '../lib/constants.ts';
 import { trySendText } from '../bot/notify.ts';
-import { getBotUsername } from '../bot/index.ts';
-import {
-  IG_ALREADY_LINKED,
-  IG_CODE_NOT_FOUND,
-  IG_LINK_SUCCESS,
-  IG_NOT_LINKED_REPLY,
-  IG_QUEUED,
-  escapeHtml,
-  igReelNotDownloadable,
-  igUnsupportedReply,
-} from '../bot/messages.ts';
+import { rememberStatusCard, sendStatusCard } from '../bot/status-card.ts';
+import { escapeHtml, unsupportedReplyKey } from '../bot/messages.ts';
+import { t } from '../i18n/index.ts';
+import { langOfUser } from '../i18n/user-lang.ts';
+
+/**
+ * Tillar haqida: Instagram webhook'ida foydalanuvchi tili kelmaydi. Bog'langan
+ * (yoki kod orqali topilgan) foydalanuvchiga uning Telegram'dagi tilida
+ * yoziladi, notanish akkauntga esa standart tilda (DEFAULT_LANG).
+ */
 
 export const instagramWebhookRouter = Router();
 
@@ -127,7 +128,6 @@ async function handleEvent(event: IgMessagingEvent): Promise<void> {
 
   const media = extractVideoAttachment(event);
   if (media) {
-    await trySendInstagramAction(senderId, 'typing_on');
     await handleMedia(senderId, event, media);
     return;
   }
@@ -139,7 +139,33 @@ async function handleEvent(event: IgMessagingEvent): Promise<void> {
 
   // Rasm, stiker, ovozli xabar va h.k.
   if ((message.attachments?.length ?? 0) > 0 || message.is_unsupported) {
-    await trySendInstagramText(senderId, igUnsupportedReply(firstAttachmentType(event)));
+    await handleUnsupported(senderId, event);
+  }
+}
+
+/** Xabarga reaksiya qo'yadi (`mid` bo'lmasa — jim o'tadi). */
+async function react(igScopedId: string, event: IgMessagingEvent, ok: boolean): Promise<void> {
+  const mid = event.message?.mid;
+  if (!mid) return;
+  await trySendInstagramReaction(igScopedId, mid, ok ? IG_REACTION.ok : IG_REACTION.fail);
+}
+
+/**
+ * Qayta ishlab bo'lmaydigan attachment (rasm, stiker, ovozli xabar...).
+ * Instagram'da faqat ❌ reaksiya; sababi bog'langan foydalanuvchiga
+ * Telegram'da aytiladi. Bog'lanmagan foydalanuvchining esa Telegram'i
+ * noma'lum — unga Instagram'ning o'zida yozishdan boshqa yo'l yo'q.
+ */
+async function handleUnsupported(igScopedId: string, event: IgMessagingEvent): Promise<void> {
+  await react(igScopedId, event, false);
+
+  const key = unsupportedReplyKey(firstAttachmentType(event));
+  const user = await usersRepo.findByIgScopedId(igScopedId);
+  const reply = t(langOfUser(user), key);
+  if (user?.link_status === 'linked') {
+    await trySendText(user.telegram_id, reply);
+  } else {
+    await trySendInstagramText(igScopedId, reply);
   }
 }
 
@@ -149,46 +175,45 @@ async function handleText(igScopedId: string, text: string): Promise<void> {
   const existing = await usersRepo.findByIgScopedId(igScopedId);
   // Qator topilishining o'zi yetarli emas — holati ham 'linked' bo'lishi kerak
   const isLinked = existing?.link_status === 'linked';
+  const lang = langOfUser(existing);
 
   if (!code) {
-    await trySendInstagramText(
-      igScopedId,
-      isLinked
-        ? '👋 Menga reels yuboring — videoni va musiqa nomini Telegram botingizga tashlayman.'
-        : IG_NOT_LINKED_REPLY,
-    );
+    await trySendInstagramText(igScopedId, t(lang, isLinked ? 'igSendReels' : 'igNotLinked'));
     return;
   }
 
   // Allaqachon bog'langan akkaunt kod yuborsa, "kod topilmadi" degan
   // chalkash javob bermaymiz.
   if (isLinked) {
-    await trySendInstagramText(igScopedId, IG_ALREADY_LINKED);
+    await trySendInstagramText(igScopedId, t(lang, 'igAlreadyLinked'));
     return;
   }
 
   const user = await usersRepo.linkUserByCode(code, igScopedId);
   if (!user) {
     logger.info({ igScopedId, code }, 'Bog\'lash kodi topilmadi');
-    await trySendInstagramText(igScopedId, IG_CODE_NOT_FOUND);
+    await trySendInstagramText(igScopedId, t(lang, 'igCodeNotFound'));
     return;
   }
 
   logger.info({ userId: user.id, telegramId: user.telegram_id, igScopedId }, 'Akkaunt bog\'landi');
 
-  await trySendInstagramText(igScopedId, IG_LINK_SUCCESS);
+  // Kod egasi topildi — endi uning tili ma'lum
+  const userLang = langOfUser(user);
+  await trySendInstagramText(igScopedId, t(userLang, 'igLinkSuccess'));
   await trySendText(
     user.telegram_id,
-    [
-      '✅ <b>Instagram akkauntingiz bog\'landi!</b>',
-      '',
-      `Endi Instagram'da <b>@${escapeHtml(env.IG_ACCOUNT_USERNAME)}</b> ga reels yuboring — `,
-      'videoni va musiqa nomini shu yerga tashlayman.',
-    ].join('\n'),
+    t(userLang, 'igLinkedTelegram', { account: escapeHtml(env.IG_ACCOUNT_USERNAME) }),
   );
 }
 
-/** Media (reels/video) — navbatga qo'yiladi. */
+/**
+ * Media (reels/video) — navbatga qo'yiladi.
+ *
+ * Instagram'da foydalanuvchiga matn yozilmaydi: natija ham, xato sababi ham
+ * Telegram'ga boradi. Instagram'dagi holat — reelsdagi reaksiya: muammo
+ * bo'lsa shu yerda ❌, hammasi joyida bo'lsa worker oxirida ✅ qo'yadi.
+ */
 async function handleMedia(
   igScopedId: string,
   event: IgMessagingEvent,
@@ -198,9 +223,13 @@ async function handleMedia(
 
   if (!user || user.link_status !== 'linked') {
     logger.info({ igScopedId }, 'Bog\'lanmagan foydalanuvchidan media keldi');
-    await trySendInstagramText(igScopedId, IG_NOT_LINKED_REPLY);
+    await react(igScopedId, event, false);
+    // Istisno: bog'lanmagan foydalanuvchining Telegram'i noma'lum — bog'lanish
+    // yo'lini faqat shu yerda aytish mumkin, aks holda u nima qilishni bilmaydi.
+    await trySendInstagramText(igScopedId, t(langOfUser(user), 'igNotLinked'));
     return;
   }
+  const lang = langOfUser(user);
 
   /**
    * Meta ba'zi reels uchun video fayl o'rniga reels SAHIFASINING havolasini
@@ -222,12 +251,8 @@ async function handleMedia(
       { igScopedId, type: media.type, url: media.url, resolver: isResolverConfigured() },
       'Meta media o\'rniga sahifa havolasini yubordi, resolver esa yo\'q',
     );
-    await trySendInstagramText(igScopedId, igReelNotDownloadable(getBotUsername()));
-    await trySendText(
-      user.telegram_id,
-      '😕 Instagram bu reels\'ning video faylini bermadi — bu Instagram tomonidagi cheklov.\n\n' +
-        'Hozircha videoni o\'zingiz saqlab shu yerga tashlang — musiqa nomini darhol topaman.',
-    );
+    await react(igScopedId, event, false);
+    await trySendText(user.telegram_id, t(lang, 'igNotDownloadable'));
     return;
   }
 
@@ -235,10 +260,8 @@ async function handleMedia(
   const pending = await requestsRepo.pendingCountForUser(user.id);
   if (pending >= env.MAX_PENDING_PER_USER) {
     logger.info({ userId: user.id, pending }, 'Foydalanuvchi navbat limitiga yetdi');
-    await trySendInstagramText(
-      igScopedId,
-      `⏳ Sizning ${pending} ta so'rovingiz hali navbatda. Ular tugagach yangisini yuboring.`,
-    );
+    await react(igScopedId, event, false);
+    await trySendText(user.telegram_id, t(lang, 'igPendingLimit', { n: pending }));
     return;
   }
 
@@ -259,6 +282,15 @@ async function handleMedia(
     { requestId: row.id, userId: user.id, mediaType: media.type, viaResolver },
     'Navbatga qo\'shildi',
   );
-  await trySendInstagramText(igScopedId, IG_QUEUED);
-  await trySendText(user.telegram_id, '⏳ Reels qabul qilindi, ishlov berilmoqda...');
+
+  // Telegram'da "⏳ Reels qabul qilindi" kartasi — natija shu xabarning o'rniga
+  // chiqadi. Bu yerda karta navbatdan KEYIN: Meta webhook'ni tez-tez qayta
+  // yuboradi, dublikatga karta chiqib-o'chib bildirishnoma bermasin.
+  const statusId = await sendStatusCard(user.telegram_id, lang, 'igReelQueued');
+  if (statusId) {
+    rememberStatusCard(row.id, statusId);
+    await requestsRepo.setStatusMessageId(row.id, statusId).catch((e: unknown) =>
+      logger.debug({ err: errMessage(e) }, 'status_message_id saqlanmadi (xotirada bor)'),
+    );
+  }
 }

@@ -5,7 +5,8 @@ import type { UserFromGetMe } from 'grammy/types';
 import { errMessage, sleep } from './lib/errors.ts';
 import { assertDbReady } from './db/supabase.ts';
 import * as requestsRepo from './db/requests.repo.ts';
-import { bot, setBotUsername, setupBotCommands } from './bot/index.ts';
+import { bot, setupBotCommands } from './bot/index.ts';
+import { setBotInfo } from './bot/info.ts';
 import { instagramWebhookRouter } from './webhook/instagram.ts';
 import { devMockRouter } from './webhook/dev-mock.ts';
 import { startWorkers, stopWorkers, workerStatus } from './workers/index.ts';
@@ -113,9 +114,19 @@ async function main(): Promise<void> {
   startTmpCleanup();
 
   const me = await getMeWithRetry();
-  setBotUsername(me.username);
+  setBotInfo({ username: me.username, supportsInline: me.supports_inline_queries });
+  if (!me.supports_inline_queries) {
+    logger.warn(
+      'Inline rejim o\'chiq — "Ulashish" tugmasi videoni emas, bot havolasini ulashadi. ' +
+        'Yoqish: @BotFather → /setinline',
+    );
+  }
   logger.info({ username: me.username }, 'Telegram bot ulandi');
-  await setupBotCommands();
+  // Buyruqlar menyusi — bezak: o'rnatilmasa ham bot to'liq ishlaydi,
+  // shuning uchun bu yerdagi xato (masalan 429 flood limit) serverni to'xtatmaydi.
+  await setupBotCommands().catch((e: unknown) =>
+    logger.warn({ err: errMessage(e) }, 'Buyruqlar menyusini yangilab bo\'lmadi — keyingi safar'),
+  );
 
   const server = app.listen(env.PORT, () => {
     logger.info(

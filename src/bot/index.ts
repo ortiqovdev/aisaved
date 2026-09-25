@@ -13,31 +13,64 @@ import { logger } from '../lib/logger.ts';
 import { errMessage } from '../lib/errors.ts';
 import * as usersRepo from '../db/users.repo.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
+import type { RequestStatus } from '../db/types.ts';
 import { IG_LINK_SOURCE, TELEGRAM_MAX_DOWNLOAD_BYTES, TELEGRAM_SOURCE } from '../lib/constants.ts';
 import {
-  HELP_TEXT,
+  DEFAULT_LANG,
+  LANGS,
+  LANG_LABELS,
+  LANG_LOCALES,
+  isLang,
+  t,
+  type Lang,
+  type MsgKey,
+  type Vars,
+} from '../i18n/index.ts';
+import { changeLang, resolveTelegramLang } from '../i18n/user-lang.ts';
+import { handleRound } from './round.ts';
+import { dropStatusCard, rememberStatusCard, sendStatusCard } from './status-card.ts';
+import {
+  ROUND_ACTION,
+  SONG_ACTION,
+  handleFindSongButton,
+  handleRoundButton,
+  handleShareInlineQuery,
+} from './video-actions.ts';
+import {
   IG_PROFILE_URL,
   alreadyLinked,
   escapeHtml,
+  helpText,
   linkInstructions,
 } from './messages.ts';
 
-export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
+/** Har bir update'da foydalanuvchi tili va tarjima funksiyasi tayyor turadi. */
+export type BotContext = Context & {
+  lang: Lang;
+  t: (key: MsgKey, vars?: Vars) => string;
+};
+
+export const bot = new Bot<BotContext>(env.TELEGRAM_BOT_TOKEN);
+
+bot.use(async (ctx, next) => {
+  ctx.lang = ctx.from
+    ? await resolveTelegramLang(ctx.from.id, ctx.from.language_code)
+    : DEFAULT_LANG;
+  ctx.t = (key, vars) => t(ctx.lang, key, vars);
+  await next();
+});
+
+/** Instagram akkaunt nomi — HTML'da xavfsiz ko'rinishda. */
+const igAccount = (): string => escapeHtml(env.IG_ACCOUNT_USERNAME);
 
 /**
- * Bot username'i (`getMe` dan, ishga tushishda to'ldiriladi).
- * Instagram javoblarida "t.me/..." havolasini yasash uchun kerak — uni
- * `.env` ga qo'lda yozib qo'yish o'rniga Telegram'ning o'zidan olamiz.
+ * Instagram chatiga to'g'ridan-to'g'ri olib boradigan tugma.
+ * `success` — yashil: xabardagi asosiy harakat (brendning lime urg'usiga eng yaqin).
  */
-let botUsername = '';
-export const setBotUsername = (value: string): void => {
-  botUsername = value;
-};
-export const getBotUsername = (): string => botUsername;
-
-/** Instagram chatiga to'g'ridan-to'g'ri olib boradigan tugma. */
-const igKeyboard = (): InlineKeyboard =>
-  new InlineKeyboard().url(`📸 @${env.IG_ACCOUNT_USERNAME} ni ochish`, IG_PROFILE_URL);
+const igKeyboard = (ctx: BotContext): InlineKeyboard =>
+  new InlineKeyboard()
+    .url(ctx.t('btnOpenInstagram', { account: env.IG_ACCOUNT_USERNAME }), IG_PROFILE_URL)
+    .success();
 
 // ---------------------------------------------------------------------------
 // Buyruqlar
@@ -51,22 +84,29 @@ bot.command('start', async (ctx) => {
     telegramId: from.id,
     username: from.username,
     firstName: from.first_name,
+    language: ctx.lang,
   });
 
   if (user.link_status === 'linked') {
-    await ctx.reply(alreadyLinked(user.ig_scoped_id), { parse_mode: 'HTML' });
+    await ctx.reply(alreadyLinked(ctx.lang, user.ig_scoped_id), { parse_mode: 'HTML' });
     return;
   }
 
   const code = user.link_code ?? (await usersRepo.ensureLinkCode(user.id)).link_code;
   if (!code) throw new Error('link_code yaratilmadi');
 
-  await ctx.reply(linkInstructions(code), {
+  await ctx.reply(linkInstructions(ctx.lang, code), {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
-    reply_markup: igKeyboard(),
+    reply_markup: igKeyboard(ctx),
   });
 });
+
+const STATUS_KEYS: Record<Exclude<RequestStatus, 'done'>, MsgKey> = {
+  queued: 'stQueued',
+  processing: 'stProcessing',
+  failed: 'stFailed',
+};
 
 bot.command('status', async (ctx) => {
   const from = ctx.from;
@@ -74,27 +114,27 @@ bot.command('status', async (ctx) => {
 
   const user = await usersRepo.findByTelegramId(from.id);
   if (!user) {
-    await ctx.reply('Siz hali ro\'yxatdan o\'tmagansiz. /start bosing.');
+    await ctx.reply(ctx.t('notRegistered'));
     return;
   }
 
   const lines: string[] = [];
   if (user.link_status === 'linked') {
-    lines.push('🔗 Holat: <b>bog\'langan</b> ✅');
+    lines.push(ctx.t('statusLinked'));
     if (user.linked_at) {
-      lines.push(`📅 Bog\'langan sana: ${escapeHtml(formatDate(user.linked_at))}`);
+      lines.push(ctx.t('statusLinkedAt', { date: escapeHtml(formatDate(user.linked_at, ctx.lang)) }));
     }
   } else {
-    lines.push('🔗 Holat: <b>bog\'lanmagan</b> ⏳');
+    lines.push(ctx.t('statusNotLinked'));
     if (user.link_code) {
-      lines.push(`🔑 Kodingiz: <code>${escapeHtml(user.link_code)}</code>`);
-      lines.push(`Uni Instagram'da @${escapeHtml(env.IG_ACCOUNT_USERNAME)} ga DM qiling.`);
+      lines.push(ctx.t('statusYourCode', { code: escapeHtml(user.link_code) }));
+      lines.push(ctx.t('statusSendCodeTo', { account: igAccount() }));
     }
   }
 
   const recent = await requestsRepo.recentByUser(user.id, 5);
   if (recent.length > 0) {
-    lines.push('', '<b>Oxirgi so\'rovlar:</b>');
+    lines.push('', ctx.t('statusRecent'));
     for (const r of recent) {
       const icon =
         r.status === 'done' ? '✅' : r.status === 'failed' ? '❌' : r.status === 'processing' ? '⚙️' : '⏳';
@@ -102,9 +142,9 @@ bot.command('status', async (ctx) => {
         r.song_title && r.song_artist
           ? `${escapeHtml(r.song_title)} — ${escapeHtml(r.song_artist)}`
           : r.status === 'done'
-            ? 'musiqa aniqlanmadi'
-            : r.status;
-      lines.push(`${icon} ${escapeHtml(formatDate(r.created_at))} · ${song}`);
+            ? ctx.t('statusNoSong')
+            : ctx.t(STATUS_KEYS[r.status]);
+      lines.push(`${icon} ${escapeHtml(formatDate(r.created_at, ctx.lang))} · ${song}`);
     }
   }
 
@@ -117,30 +157,63 @@ bot.command('unlink', async (ctx) => {
 
   const user = await usersRepo.findByTelegramId(from.id);
   if (!user) {
-    await ctx.reply('Siz hali ro\'yxatdan o\'tmagansiz. /start bosing.');
+    await ctx.reply(ctx.t('notRegistered'));
     return;
   }
   if (user.link_status !== 'linked') {
-    await ctx.reply('Siz hozir hech qanday Instagram akkauntga bog\'lanmagansiz. /start bosing.');
+    await ctx.reply(ctx.t('unlinkNotLinked'));
     return;
   }
 
   const updated = await usersRepo.unlinkUser(user.id);
   await ctx.reply(
-    [
-      '🔓 Bog\'lanish bekor qilindi.',
-      '',
-      'Qayta bog\'lash uchun yangi kod:',
-      `<code>${escapeHtml(updated.link_code ?? '')}</code>`,
-      '',
-      `Uni Instagram'da @${escapeHtml(env.IG_ACCOUNT_USERNAME)} ga DM qiling.`,
-    ].join('\n'),
-    { parse_mode: 'HTML', reply_markup: igKeyboard() },
+    ctx.t('unlinkDone', { code: escapeHtml(updated.link_code ?? ''), account: igAccount() }),
+    { parse_mode: 'HTML', reply_markup: igKeyboard(ctx) },
   );
 });
 
+// Videoga javob qilib yozilsa — o'sha videodan dumaloq video xabar ([round.ts])
+bot.command('round', handleRound);
+
+// Yuklab olingan video tagidagi tugmalar va inline ulashish ([video-actions.ts])
+bot.callbackQuery(SONG_ACTION, handleFindSongButton);
+bot.callbackQuery(ROUND_ACTION, handleRoundButton);
+bot.on('inline_query', handleShareInlineQuery);
+
 bot.command('help', async (ctx) => {
-  await ctx.reply(HELP_TEXT, { parse_mode: 'HTML' });
+  await ctx.reply(helpText(ctx.lang), { parse_mode: 'HTML' });
+});
+
+// ---------------------------------------------------------------------------
+// Til tanlash
+// ---------------------------------------------------------------------------
+
+const LANG_PREFIX = 'lang';
+
+function languageKeyboard(): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  LANGS.forEach((lang, i) => {
+    kb.text(LANG_LABELS[lang], `${LANG_PREFIX}:${lang}`);
+    if (i % 2 === 1) kb.row();
+  });
+  return kb;
+}
+
+bot.command('language', async (ctx) => {
+  await ctx.reply(ctx.t('languagePrompt'), { reply_markup: languageKeyboard() });
+});
+
+bot.callbackQuery(new RegExp(`^${LANG_PREFIX}:(\\w+)$`), async (ctx) => {
+  const lang = ctx.match?.[1];
+  if (!isLang(lang)) {
+    await ctx.answerCallbackQuery({ text: ctx.t('invalidChoice'), show_alert: true });
+    return;
+  }
+
+  await changeLang(ctx.from.id, lang);
+  ctx.lang = lang;
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(ctx.t('languageChanged'));
 });
 
 // ---------------------------------------------------------------------------
@@ -194,18 +267,12 @@ bot.on(
 
     const media = extractTelegramMedia(ctx.message);
     if (!media) {
-      await ctx.reply(
-        '🤔 Bu faylda video yoki audio yo\'q. Reels, video yoki ovozli xabar yuboring.',
-      );
+      await ctx.reply(ctx.t('mediaNotFound'));
       return;
     }
 
     if (media.fileSize !== undefined && media.fileSize > TELEGRAM_MAX_DOWNLOAD_BYTES) {
-      await ctx.reply(
-        '📦 Fayl 20MB dan katta — Telegram botlari bunday faylni yuklab ola olmaydi.\n\n' +
-          'Qisqaroq parcha yuboring yoki reels\'ni Instagram orqali tashlang.',
-        { reply_markup: igKeyboard() },
-      );
+      await ctx.reply(ctx.t('fileTooBig20'), { reply_markup: igKeyboard(ctx) });
       return;
     }
 
@@ -213,19 +280,18 @@ bot.on(
       telegramId: from.id,
       username: from.username,
       firstName: from.first_name,
+      language: ctx.lang,
     });
 
     // Spam himoyasi: bitta foydalanuvchi navbatni to'ldirib, AudD limitini
     // (va boshqalarning navbatini) yeb qo'ymasligi uchun.
     const pending = await requestsRepo.pendingCountForUser(user.id);
     if (pending >= env.MAX_PENDING_PER_USER) {
-      await ctx.reply(
-        `⏳ Sizning ${pending} ta so'rovingiz hali navbatda. ` +
-          'Ular tugagach yangisini yuboring — /status orqali holatni ko\'rishingiz mumkin.',
-      );
+      await ctx.reply(ctx.t('pendingLimit', { n: pending }));
       return;
     }
 
+    const statusId = await openStatusCard(ctx, 'mediaQueued');
     const row = await requestsRepo.enqueue({
       userId: user.id,
       // Bir xil xabar ikki marta qayta ishlanmasligi uchun (unique constraint)
@@ -234,21 +300,39 @@ bot.on(
       mediaUrl: media.fileId,
       mediaType: TELEGRAM_SOURCE,
       fileUniqueId: media.fileUniqueId,
+      statusMessageId: statusId,
     });
 
-    if (!row) return; // dublikat
+    if (!row) {
+      await dropStatusCard(ctx.chat.id, statusId); // dublikat
+      return;
+    }
+    if (statusId) rememberStatusCard(row.id, statusId);
 
     logger.info(
       { requestId: row.id, telegramId: from.id, kind: media.kind },
       'Telegram\'dan media navbatga qo\'shildi',
     );
-    await ctx.reply('⏳ Qabul qilindi — musiqasini aniqlayapman...');
   },
 );
 
+/**
+ * "⏳ Qabul qilindi" kartasi — natija keyin shu xabarning o'rniga chiqadi.
+ * Faqat shaxsiy chatda: natijalar foydalanuvchining shaxsiy chatiga boradi,
+ * guruhda karta boshqa chatda qolib ketardi — u yerda oddiy matn.
+ */
+async function openStatusCard(ctx: BotContext, key: MsgKey): Promise<number | null> {
+  if (!ctx.chat || !ctx.message) return null;
+  if (ctx.chat.type !== 'private') {
+    await ctx.reply(ctx.t(key));
+    return null;
+  }
+  return sendStatusCard(ctx.chat.id, ctx.lang, key, ctx.message.message_id);
+}
+
 // Rasm — qayta ishlay olmaymiz
 bot.on('message:photo', async (ctx) => {
-  await ctx.reply('🖼 Bu rasm. Musiqani faqat video yoki audiodan aniqlay olaman.');
+  await ctx.reply(ctx.t('photoNotSupported'));
 });
 
 /**
@@ -258,7 +342,7 @@ bot.on('message:photo', async (ctx) => {
  * havoladan videoni tashqi resolver topadi ([services/ig-resolver.ts]).
  * Undan keyin oqim media bilan bir xil: yuklash → audio parcha → AudD → Deezer.
  */
-async function handleInstagramLink(ctx: Context, link: ParsedLink): Promise<void> {
+async function handleInstagramLink(ctx: BotContext, link: ParsedLink): Promise<void> {
   const from = ctx.from;
   const chat = ctx.chat;
   const message = ctx.message;
@@ -266,10 +350,7 @@ async function handleInstagramLink(ctx: Context, link: ParsedLink): Promise<void
 
   // Resolver ulanmagan bo'lsa navbatni behuda band qilmaymiz — darhol aytamiz
   if (!isResolverConfigured()) {
-    await ctx.reply(
-      '⚙️ Havola orqali yuklash hozircha yoqilmagan.\n\n' +
-        'Videoni menga to\'g\'ridan-to\'g\'ri tashlang — musiqasini darhol aytaman.',
-    );
+    await ctx.reply(ctx.t('linkDisabled'));
     return;
   }
 
@@ -277,17 +358,16 @@ async function handleInstagramLink(ctx: Context, link: ParsedLink): Promise<void
     telegramId: from.id,
     username: from.username,
     firstName: from.first_name,
+    language: ctx.lang,
   });
 
   const pending = await requestsRepo.pendingCountForUser(user.id);
   if (pending >= env.MAX_PENDING_PER_USER) {
-    await ctx.reply(
-      `⏳ Sizning ${pending} ta so'rovingiz hali navbatda. ` +
-        'Ular tugagach yangisini yuboring — /status orqali holatni ko\'rishingiz mumkin.',
-    );
+    await ctx.reply(ctx.t('pendingLimit', { n: pending }));
     return;
   }
 
+  const statusId = await openStatusCard(ctx, 'linkQueued');
   const row = await requestsRepo.enqueue({
     userId: user.id,
     igMessageId: `tg:${chat.id}:${message.message_id}`,
@@ -296,15 +376,19 @@ async function handleInstagramLink(ctx: Context, link: ParsedLink): Promise<void
     // Shortcode doimiy — ayni havola qayta yuborilsa natija keshdan olinadi
     // va resolver ham, AudD ham bezovta qilinmaydi.
     fileUniqueId: `ig:${link.shortcode}`,
+    statusMessageId: statusId,
   });
 
-  if (!row) return; // dublikat
+  if (!row) {
+    await dropStatusCard(chat.id, statusId); // dublikat
+    return;
+  }
+  if (statusId) rememberStatusCard(row.id, statusId);
 
   logger.info(
     { requestId: row.id, telegramId: from.id, shortcode: link.shortcode, kind: link.kind },
     'Instagram havolasi navbatga qo\'shildi',
   );
-  await ctx.reply('⏳ Havola qabul qilindi — videoni olib, musiqasini aniqlayapman...');
 }
 
 // Boshqa har qanday matn
@@ -312,7 +396,7 @@ bot.on('message:text', async (ctx) => {
   const text = ctx.message.text;
 
   if (text.startsWith('/')) {
-    await ctx.reply('Bunday buyruq yo\'q. /help ni ko\'ring.');
+    await ctx.reply(ctx.t('unknownCommand'));
     return;
   }
 
@@ -323,19 +407,11 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  await ctx.reply(
-    [
-      'Menga quyidagilardan birini yuboring 👇',
-      '',
-      '🔗 <b>Instagram havolasi</b> — reels yoki video post havolasini tashlang',
-      '🎬 <b>Video yoki audio</b> — to\'g\'ridan-to\'g\'ri shu yerga (20MB gacha)',
-      '',
-      `📸 Yoki Instagram'da <b>@${escapeHtml(env.IG_ACCOUNT_USERNAME)}</b> ga reels yuboring.`,
-      '',
-      'Yordam: /help · Holat: /status',
-    ].join('\n'),
-    { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, reply_markup: igKeyboard() },
-  );
+  await ctx.reply(ctx.t('textMenu', { account: igAccount() }), {
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+    reply_markup: igKeyboard(ctx),
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -349,31 +425,30 @@ bot.on('message:text', async (ctx) => {
 bot.callbackQuery(new RegExp(`^${PREVIEW_PREFIX}:(\\d+)$`), async (ctx) => {
   const id = Number(ctx.match?.[1]);
   if (!Number.isFinite(id)) {
-    await ctx.answerCallbackQuery({ text: 'Noto\'g\'ri tanlov', show_alert: true });
+    await ctx.answerCallbackQuery({ text: ctx.t('invalidChoice'), show_alert: true });
     return;
   }
 
   // Inline rejimdagi xabarda chat bo'lmaydi — u holda yuborishga joy yo'q
   const chatId = ctx.chat?.id;
   if (chatId === undefined) {
-    await ctx.answerCallbackQuery({ text: 'Bu yerda yuborib bo\'lmaydi', show_alert: true });
+    await ctx.answerCallbackQuery({ text: ctx.t('cantSendHere'), show_alert: true });
     return;
   }
 
-  await ctx.answerCallbackQuery({ text: '⏳ Yuborilmoqda...' });
+  await ctx.answerCallbackQuery({ text: ctx.t('sending') });
 
   const track = await getTrack(id);
   if (!track?.previewUrl) {
-    await ctx.reply('😕 Bu versiya uchun tinglash parchasi topilmadi.');
+    await ctx.reply(ctx.t('previewNotFound'));
     return;
   }
 
-  const caption =
-    `🎧 <b>${escapeHtml(track.title)}</b>\n👤 ${escapeHtml(track.artist)}\n\n` +
-    '<i>Bu — 30 soniyalik rasmiy parcha. To\'liq qo\'shiqni yuqoridagi havolalar orqali tinglang.</i>';
-
   const options = {
-    caption,
+    caption: ctx.t('previewCaption', {
+      title: escapeHtml(track.title),
+      artist: escapeHtml(track.artist),
+    }),
     parse_mode: 'HTML' as const,
     title: track.title,
     performer: track.artist,
@@ -393,7 +468,7 @@ bot.callbackQuery(new RegExp(`^${PREVIEW_PREFIX}:(\\d+)$`), async (ctx) => {
       await ctx.api.sendAudio(chatId, new InputFile(tmp), options);
     } catch (e2) {
       logger.warn({ err: errMessage(e2) }, 'Preview yuborilmadi');
-      await ctx.reply('😕 Parchani yuborib bo\'lmadi. Havola orqali tinglab ko\'ring.');
+      await ctx.reply(ctx.t('previewFailed'));
     } finally {
       await safeUnlink(tmp);
     }
@@ -417,23 +492,43 @@ bot.catch(async (err) => {
   }
 
   try {
-    await ctx.reply('⚠️ Kutilmagan xatolik yuz berdi. Birozdan so\'ng qayta urinib ko\'ring.');
+    await ctx.reply(t(ctx.lang ?? DEFAULT_LANG, 'unexpectedError'));
   } catch {
     // javob ham ketmasa — faqat logda qoladi
   }
 });
 
+/** Buyruqlar menyusi — har bir til uchun (Telegram ilova tiliga qarab ko'rsatadi). */
 export async function setupBotCommands(): Promise<void> {
-  await bot.api.setMyCommands([
-    { command: 'start', description: 'Bog\'lanishni boshlash / kodni olish' },
-    { command: 'status', description: 'Holat va oxirgi so\'rovlar' },
-    { command: 'unlink', description: 'Bog\'lanishni bekor qilish' },
-    { command: 'help', description: 'Yordam' },
-  ]);
+  const commandsFor = (lang: Lang) => [
+    { command: 'start', description: t(lang, 'cmdStart') },
+    { command: 'round', description: t(lang, 'cmdRound') },
+    { command: 'status', description: t(lang, 'cmdStatus') },
+    { command: 'language', description: t(lang, 'cmdLanguage') },
+    { command: 'unlink', description: t(lang, 'cmdUnlink') },
+    { command: 'help', description: t(lang, 'cmdHelp') },
+  ];
+
+  /**
+   * Faqat o'zgargan menyu yoziladi. Har ishga tushishda 7 marta setMyCommands
+   * chaqirish (6 til + standart) Telegram'ning flood limitiga tushadi —
+   * ayniqsa `--watch` rejimida server tez-tez qayta ishga tushganda.
+   */
+  const sync = async (lang: Lang, code?: Lang): Promise<void> => {
+    const wanted = commandsFor(lang);
+    const other = code ? { language_code: code } : {};
+    const current = await bot.api.getMyCommands(other);
+    if (JSON.stringify(current) === JSON.stringify(wanted)) return;
+    await bot.api.setMyCommands(wanted, other);
+  };
+
+  // Til kodisiz — standart (til ro'yxatimizda yo'q foydalanuvchilar uchun)
+  await sync(DEFAULT_LANG);
+  for (const lang of LANGS) await sync(lang, lang);
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string, lang: Lang): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString('uz-UZ', { dateStyle: 'short', timeStyle: 'short' });
+  return d.toLocaleString(LANG_LOCALES[lang], { dateStyle: 'short', timeStyle: 'short' });
 }

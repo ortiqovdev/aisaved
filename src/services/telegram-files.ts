@@ -2,6 +2,7 @@ import { GrammyError } from 'grammy';
 import { bot } from '../bot/index.ts';
 import { env } from '../config/env.ts';
 import { PermanentError, TransientError, errMessage } from '../lib/errors.ts';
+import { msg } from '../i18n/index.ts';
 
 /**
  * file_id dan yuklab olinadigan URL yasaydi.
@@ -25,14 +26,13 @@ export async function resolveTelegramFileUrl(fileId: string): Promise<string> {
       if (/too big/i.test(e.description)) {
         throw new PermanentError(
           `Telegram fayli juda katta: ${e.description}`,
-          '📦 Fayl 20MB dan katta — Telegram botlari bunday faylni yuklab ololmaydi. ' +
-            'Qisqaroq video yuboring.',
+          msg('fileTooBig20'),
         );
       }
       if (e.error_code === 400) {
         throw new PermanentError(
           `Telegram getFile 400: ${e.description}`,
-          '❌ Bu faylni ola olmadim. Iltimos, qaytadan yuboring.',
+          msg('errCantGetFile'),
         );
       }
       throw new TransientError(`Telegram getFile ${e.error_code}: ${e.description}`);

@@ -9,6 +9,8 @@ export interface UserRow {
   ig_scoped_id: string | null;
   link_code: string | null;
   link_status: LinkStatus;
+  /** Tanlangan til kodi (0003 migratsiyasi; qo'llanmagan bazada bo'lmaydi). */
+  language?: string | null;
   created_at: string;
   linked_at: string | null;
 }
@@ -34,6 +36,8 @@ export interface RequestRow {
   song_album: string | null;
   song_link: string | null;
   error_message: string | null;
+  /** "Qabul qilindi" kartasi — natijaga aylantiriladigan xabar (0004 migratsiyasi). */
+  status_message_id?: number | null;
   created_at: string;
   completed_at: string | null;
 }

@@ -17,6 +17,8 @@ RUN apk add --no-cache ffmpeg
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
+# "Qabul qilindi" kartasi rasmi (src/bot/status-card.ts)
+COPY assets ./assets
 
 # root emas
 USER node

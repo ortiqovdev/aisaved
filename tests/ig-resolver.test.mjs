@@ -13,6 +13,18 @@ const SHAPES = {
   E: { status: 'ok', data: { thumbnail: 'https://x/t.jpg', title: 'Salom' } }, // video yo'q
   F: { data: { medias: [{ url: 'https://cdn.example.com/deep-f.mp4', quality: 'hd' }] } },
   G: { data: { video_url: 'https://cdn.example.com/g.mp4', title: 'Sarlavha', username: 'ortqv7' } },
+  // Haqiqiy provayder shakli (instagram-post-reels-stories-downloader-api): karusel
+  H: { status: true, result: [
+    { url: 'https://cdn.example.com/1.jpg', type: 'image/jpeg', thumb: 'https://t/1' },
+    { url: 'https://cdn.example.com/2.mp4', type: 'video/mp4', thumb: 'https://t/2' },
+    { url: 'https://cdn.example.com/3.jpg', type: 'image/jpeg', thumb: 'https://t/3' },
+  ] },
+  // Bitta videoning sifat variantlari (turi ko'rsatilmagan) — karusel EMAS
+  I: { data: { medias: [
+    { url: 'https://cdn.example.com/hd.mp4', quality: 'hd' },
+    { url: 'https://cdn.example.com/sd.mp4', quality: 'sd' },
+  ] } },
+  J: { status: true, result: [{ url: 'https://cdn.example.com/photo.jpg', type: 'image/jpeg', thumb: 'https://cdn.example.com/t.jpg' }] },
 };
 
 const server = http.createServer((req, res) => {
@@ -75,7 +87,20 @@ for (const [code, want, desc] of [
 ]) {
   try {
     const r = await R(code);
-    ok(`${code}: ${desc}`, code === 'D' ? r.videoUrl.includes('cdninstagram') : r.videoUrl === want, `oldi: ${r.videoUrl}`);
+    const got = r.urls[0] ?? '';
+    ok(`${code}: ${desc}`, r.urls.length === 1 && (code === 'D' ? got.includes('cdninstagram') : got === want), `oldi: ${JSON.stringify(r.urls)}`);
+  } catch (e) { ok(`${code}: ${desc}`, false, `xato: ${e.message}`); }
+}
+
+console.log('\n=== 2b) Rasm va karusel postlar ===');
+for (const [code, want, desc] of [
+  ['H', ['https://cdn.example.com/1.jpg', 'https://cdn.example.com/2.mp4', 'https://cdn.example.com/3.jpg'], 'karusel: 3 ta fayl, tartib saqlangan'],
+  ['I', ['https://cdn.example.com/hd.mp4'], 'sifat variantlari — bitta video (dublikat yo\'q)'],
+  ['J', ['https://cdn.example.com/photo.jpg'], 'bitta rasm, muqova (thumb) emas'],
+]) {
+  try {
+    const r = await R(code);
+    ok(`${code}: ${desc}`, JSON.stringify(r.urls) === JSON.stringify(want), `oldi: ${JSON.stringify(r.urls)}`);
   } catch (e) { ok(`${code}: ${desc}`, false, `xato: ${e.message}`); }
 }
 try {
@@ -96,7 +121,7 @@ for (const [code, kind, wantType] of [
     ok(`${kind}`, false, 'xato bermadi!');
   } catch (e) {
     ok(`${kind} -> ${e.constructor.name}`, e.constructor.name === wantType, `kutilgan ${wantType}`);
-    if (e.userMessage) console.log(`         user: ${e.userMessage.split('\n')[0]}`);
+    if (e.userMessage) console.log(`         user: ${e.userMessage.key}`);
   }
 }
 

@@ -8,6 +8,7 @@ import * as requestsRepo from '../db/requests.repo.ts';
 import {
   SILENCE_THRESHOLD_DB,
   downloadMedia,
+  type DownloadedFile,
   extractAudioSnippet,
   measureLoudnessDb,
   probeDurationSeconds,
@@ -17,8 +18,17 @@ import {
 import { identifySong, type SongInfo } from '../services/audd.ts';
 import { resolveTelegramFileUrl } from '../services/telegram-files.ts';
 import { resolveInstagramMedia } from '../services/ig-resolver.ts';
+import {
+  IG_REACTION,
+  instagramMessageIdOf,
+  trySendInstagramReaction,
+  type IgReaction,
+} from '../services/instagram.ts';
 import { IG_LINK_SOURCE, TELEGRAM_SOURCE } from '../lib/constants.ts';
-import { sendResult, sendSongOnly } from '../bot/notify.ts';
+import { msg } from '../i18n/index.ts';
+import { langOfUser } from '../i18n/user-lang.ts';
+import { deliverDownloads, deliverSong } from '../bot/notify.ts';
+import { forgetStatusCard, statusCardOf } from '../bot/status-card.ts';
 
 /**
  * Bitta jobni to'liq bajaradi:
@@ -33,6 +43,7 @@ export async function processRequest(job: RequestRow): Promise<void> {
   if (!user) {
     throw new PermanentError(`user_id=${job.user_id} topilmadi`);
   }
+  const lang = langOfUser(user);
 
   // Media uch manbadan kelishi mumkin:
   //   telegram_file → foydalanuvchi faylni botga tashlagan (video unda bor)
@@ -58,22 +69,33 @@ export async function processRequest(job: RequestRow): Promise<void> {
       song_album: job.song_album,
       song_link: job.song_link,
     });
+    await reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.ok);
     return;
   }
 
-  let videoPath: string | null = null;
   const tempFiles: string[] = [];
 
+  // Ikki xil ish:
+  //   telegram_file → musiqa aniqlash (video botga tashlangan yoki natija
+  //                   videosi tagidagi "🎵" bosilgan) — javob o'sha videoga
+  //   ig_link / ig_reel / ig_post → YUKLAB olish (video, rasm yoki butun
+  //                   karusel); qo'shiq avtomatik emas, "🎵" tugmasi orqali
+  //
+  // Ikkalasida ham "⏳ Qabul qilindi" kartasi bo'lsa — natija o'sha kartaning
+  // o'rniga chiqadi (foydalanuvchiga bitta xabar). Kartaning ID'si oxirida
+  // o'qiladi: job band qilinganda bot uni hali yubormagan bo'lishi mumkin.
+  const replyTo = fromTelegram ? telegramMessageIdOf(job.ig_message_id) : undefined;
+
   try {
-    // 0) Kesh: ayni fayl avval aniqlangan bo'lsa AudD'ni bezovta qilmaymiz.
-    //    Instagram'da CDN URL har safar boshqacha bo'ladi, shuning uchun
-    //    kesh faqat Telegram fayllari uchun ishlaydi (file_unique_id doimiy).
-    //    Havola oqimida kesh javobni TO'LIQ almashtira olmaydi: foydalanuvchi
-    //    videoni ham kutadi, shuning uchun u yerda kesh faqat AudD chaqiruvini
-    //    tejaydi (pastda `cached ?? identify...`).
-    const cached = await lookupCache(job, log);
-    if (cached && fromTelegram) {
-      await withTelegramErrors(() => sendSongOnly(user.telegram_id, cached));
+    // 0) Kesh: ayni fayl avval aniqlangan bo'lsa AudD'ni bezovta qilmaymiz
+    //    (file_unique_id doimiy — bir videoni ko'p odam so'rasa ham bitta so'rov).
+    const cached = fromTelegram ? await lookupCache(job, log) : null;
+    if (cached) {
+      const statusId = await statusCardOf(job.id);
+      await withTelegramErrors(() =>
+        deliverSong(user.telegram_id, cached, lang, statusId, replyTo),
+      );
+      forgetStatusCard(job.id);
       await requestsRepo.markSent(job.id);
       await requestsRepo.markDone(job.id, {
         video_file_path: null,
@@ -86,37 +108,29 @@ export async function processRequest(job: RequestRow): Promise<void> {
       return;
     }
 
-    // 1) Manba havolasi.
-    //    Instagram: webhookdagi CDN URL (~7 kun amal qiladi — darhol yuklaymiz)
-    //    Telegram:  file_id -> vaqtinchalik URL (~1 soat)
-    let sourceUrl: string;
+    let song: SongInfo | null = null;
     if (fromTelegram) {
-      sourceUrl = await resolveTelegramFileUrl(job.media_url);
-    } else if (fromLink) {
-      // Havolaning o'zi HTML sahifa — undan video faylini tashqi xizmat topadi
-      const resolved = await resolveInstagramMedia(job.media_url);
-      log.info({ title: resolved.title, author: resolved.author }, 'Havoladan video topildi');
-      sourceUrl = resolved.videoUrl;
+      // 1-3) Musiqa: file_id → vaqtinchalik URL (~1 soat) → yuklash → bir
+      //      necha parcha o'rnini sinab aniqlash (reels boshida ko'pincha gap
+      //      yoki sukunat bo'ladi)
+      const url = await resolveTelegramFileUrl(job.media_url);
+      const file = await downloadMedia(url, job.id, { allowAudio: true });
+      tempFiles.push(file.filePath);
+      song = await identifyWithFallback(file.filePath, job, log, tempFiles);
+
+      const statusId = await statusCardOf(job.id);
+      await withTelegramErrors(() =>
+        deliverSong(user.telegram_id, song, lang, statusId, replyTo),
+      );
     } else {
-      sourceUrl = job.media_url;
+      // 1-3) Yuklab olish: bitta video/rasm yoki butun karusel
+      const files = await downloadPostFiles(job, fromLink, log);
+      tempFiles.push(...files.map((f) => f.filePath));
+
+      const statusId = await statusCardOf(job.id);
+      await withTelegramErrors(() => deliverDownloads(user.telegram_id, files, lang, statusId));
     }
-
-    const downloaded = await downloadMedia(sourceUrl, job.id, { allowAudio: fromTelegram });
-    videoPath = downloaded.filePath;
-
-    // 2-3) Musiqa aniqlash. Bir necha parcha o'rnini sinab ko'radi —
-    //      reels boshida ko'pincha gap yoki sukunat bo'ladi.
-    //      Kesh bo'lsa AudD umuman chaqirilmaydi.
-    const song = cached ?? (await identifyWithFallback(videoPath, job, log, tempFiles));
-
-    // 4) Javob.
-    //    Telegram'dan kelgan bo'lsa videoni qaytarib yubormaymiz — u foydalanuvchida
-    //    allaqachon bor. Instagram'dan kelganda esa video + caption yuboriladi.
-    if (fromTelegram) {
-      await withTelegramErrors(() => sendSongOnly(user.telegram_id, song));
-    } else {
-      await withTelegramErrors(() => sendResult(user.telegram_id, videoPath!, song));
-    }
+    forgetStatusCard(job.id);
 
     // 5) Yuborilgani belgilanadi — keyingi qadam yiqilsa ham takror yuborilmaydi
     await requestsRepo.markSent(job.id);
@@ -133,11 +147,77 @@ export async function processRequest(job: RequestRow): Promise<void> {
     });
 
     log.info({ song: song?.title ?? null }, 'Job muvaffaqiyatli yakunlandi');
+
+    // 7) Instagram'dan kelgan bo'lsa — reelsga ✅ (u yerda matn yozilmaydi)
+    await reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.ok);
   } finally {
     // Vaqtinchalik fayllar har qanday holatda tozalanadi
     for (const f of tempFiles) await safeUnlink(f);
-    await safeUnlink(videoPath);
   }
+}
+
+/**
+ * Postdagi fayllarni yuklab oladi.
+ *   ig_link → resolver butun postni beradi (reels: 1 ta, karusel: bir nechta)
+ *   ig_reel / ig_post / ... → webhookdagi bitta CDN havolasi (~7 kun amal qiladi)
+ *
+ * Karuselda bitta fayl doimiy xato bersa (o'chirilgan, format) — qolganlari
+ * baribir yuboriladi. Vaqtinchalik xatoda esa butun job qayta urinadi.
+ */
+async function downloadPostFiles(
+  job: RequestRow,
+  fromLink: boolean,
+  log: Logger,
+): Promise<DownloadedFile[]> {
+  let urls = [job.media_url];
+  if (fromLink) {
+    const resolved = await resolveInstagramMedia(job.media_url);
+    log.info(
+      { files: resolved.urls.length, title: resolved.title, author: resolved.author },
+      'Havoladan post topildi',
+    );
+    urls = resolved.urls;
+  }
+
+  const files: DownloadedFile[] = [];
+  let firstError: unknown = null;
+  for (const url of urls) {
+    try {
+      files.push(await downloadMedia(url, job.id, { allowImage: true }));
+    } catch (e) {
+      if (urls.length === 1 || !(e instanceof PermanentError)) {
+        for (const f of files) await safeUnlink(f.filePath);
+        throw e;
+      }
+      firstError ??= e;
+      log.warn({ err: errMessage(e) }, 'Karusel fayli yuklanmadi — qolganlari yuboriladi');
+    }
+  }
+  if (files.length === 0) throw firstError;
+  return files;
+}
+
+/**
+ * Telegram'dan kelgan so'rovning video xabari ID'si (`tg:<chat>:<msg>[:song]`) —
+ * musiqa natijasi o'sha videoga javob bo'lib chiqishi uchun.
+ */
+function telegramMessageIdOf(igMessageId: string | null): number | undefined {
+  const id = Number(igMessageId?.split(':')[2]);
+  return igMessageId?.startsWith('tg:') && Number.isInteger(id) && id > 0 ? id : undefined;
+}
+
+/**
+ * Instagram DM orqali kelgan so'rovning xabariga reaksiya qo'yadi.
+ * Telegram'dan kelgan so'rovlarda (yoki IGSID bo'lmasa) hech narsa qilmaydi.
+ */
+export async function reactOnInstagram(
+  job: RequestRow,
+  igScopedId: string | null,
+  reaction: IgReaction,
+): Promise<void> {
+  const messageId = instagramMessageIdOf(job.ig_message_id);
+  if (!messageId || !igScopedId) return;
+  await trySendInstagramReaction(igScopedId, messageId, reaction);
 }
 
 /**
@@ -236,8 +316,15 @@ async function identifyWithFallback(
   if (lastError instanceof TransientError && !isLastAttempt) {
     throw lastError; // butun job qayta urinadi
   }
-  log.warn({ err: errMessage(lastError) }, 'Musiqa aniqlanmadi — natija musiqasiz yuboriladi');
-  return null;
+
+  /**
+   * Xizmat ishlamayapti (token yaroqsiz, obuna tugagan, limit) — bu "musiqa
+   * topilmadi" EMAS. Ilgari shunday deb ko'rsatilardi va muammo haftalab
+   * sezilmay qolgan edi. Endi foydalanuvchiga rostini aytamiz, logda esa xato.
+   */
+  log.error({ err: errMessage(lastError) }, 'Musiqa aniqlash xizmati ishlamadi (AudD)');
+  if (lastError instanceof PermanentError) throw lastError;
+  throw new PermanentError(errMessage(lastError), msg('songServiceDown'));
 }
 
 /** Telegram xatolarini retry-qilinadigan / qilinmaydiganga ajratadi. */
@@ -254,7 +341,7 @@ async function withTelegramErrors(send: () => Promise<void>): Promise<void> {
       if (e.error_code === 413 || /too big|too large/i.test(e.description)) {
         throw new PermanentError(
           `Telegram fayl hajmi limiti: ${e.description}`,
-          '📦 Video Telegram limitidan (50MB) katta bo\'lgani uchun yuborib bo\'lmadi.',
+          msg('errTooBigForTelegram'),
         );
       }
       // 429 — flood control

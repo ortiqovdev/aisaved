@@ -7,8 +7,12 @@ import type { RequestRow } from '../db/types.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
 import * as usersRepo from '../db/users.repo.ts';
 import { TELEGRAM_SOURCE } from '../lib/constants.ts';
-import { trySendText } from '../bot/notify.ts';
-import { processRequest } from './processor.ts';
+import { showFailure } from '../bot/notify.ts';
+import { forgetStatusCard, statusCardOf } from '../bot/status-card.ts';
+import { IG_REACTION } from '../services/instagram.ts';
+import { msg, t } from '../i18n/index.ts';
+import { langOfUser } from '../i18n/user-lang.ts';
+import { processRequest, reactOnInstagram } from './processor.ts';
 
 const WORKER_ID = `${os.hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
 
@@ -114,16 +118,21 @@ async function notifyUserOfFailure(job: RequestRow, e: unknown): Promise<void> {
   // Umumiy xabar manbaga qarab farq qiladi: foydalanuvchi videoni botga
   // o'zi tashlagan bo'lsa, "Instagram'da qaytadan yuboring" deyish chalkash.
   const fallback =
-    job.media_type === TELEGRAM_SOURCE
-      ? '❌ Faylni qayta ishlashda xatolik yuz berdi. Iltimos, videoni qaytadan yuboring.'
-      : '❌ Videoni qayta ishlashda xatolik yuz berdi. Iltimos, reels\'ni Instagram\'da qaytadan yuboring.';
+    job.media_type === TELEGRAM_SOURCE ? msg('failTelegramSource') : msg('failInstagramSource');
 
   const userMessage =
     e instanceof PermanentError && e.userMessage ? e.userMessage : fallback;
 
   try {
     const user = await usersRepo.findById(job.user_id);
-    if (user) await trySendText(user.telegram_id, userMessage);
+    if (user) {
+      const text = t(langOfUser(user), userMessage.key, userMessage.vars);
+      // "Qabul qilindi" kartasi bo'lsa — yangi xabar emas, kartaning matni xatoga almashadi
+      await showFailure(user.telegram_id, text, await statusCardOf(job.id));
+      forgetStatusCard(job.id);
+      // Instagram'dan kelgan bo'lsa — reelsga ❌ (sababi Telegram'da yozildi)
+      await reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.fail);
+    }
   } catch (dbErr) {
     logger.warn({ err: errMessage(dbErr) }, 'Xato haqida xabar berib bo\'lmadi');
   }

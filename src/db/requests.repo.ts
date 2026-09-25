@@ -1,4 +1,4 @@
-import { supabase, hasMigration0002 } from './supabase.ts';
+import { supabase, hasMigration0002, hasMigration0004 } from './supabase.ts';
 import type { RequestRow } from './types.ts';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
@@ -10,6 +10,8 @@ interface EnqueueInput {
   mediaType: string | null;
   /** Telegram `file_unique_id` — dedup/kesh kaliti. Instagram'da yo'q. */
   fileUniqueId?: string | null;
+  /** "Qabul qilindi" kartasi — natija shu xabarning o'rniga chiqadi. */
+  statusMessageId?: number | null;
 }
 
 /**
@@ -28,6 +30,9 @@ export async function enqueue(input: EnqueueInput): Promise<RequestRow | null> {
       status: 'queued',
       // Ustun 0002 migratsiyasida qo'shiladi — qo'llanmagan bazada yubormaymiz
       ...(hasMigration0002() ? { file_unique_id: input.fileUniqueId ?? null } : {}),
+      ...(hasMigration0004() && input.statusMessageId
+        ? { status_message_id: input.statusMessageId }
+        : {}),
     })
     .select('*')
     .single<RequestRow>();
@@ -40,6 +45,34 @@ export async function enqueue(input: EnqueueInput): Promise<RequestRow | null> {
     throw new Error(`Navbatga qo'shishda xato: ${error.message}`);
   }
   return data;
+}
+
+/**
+ * Status xabari ID'sini keyin yozadi (0004 bo'lmasa — hech narsa qilmaydi).
+ * Instagram webhook'i uchun: u yerda karta dublikat tekshiruvidan KEYIN yuboriladi.
+ */
+export async function setStatusMessageId(id: number, messageId: number): Promise<void> {
+  if (!hasMigration0004()) return;
+  const { error } = await supabase
+    .from('requests')
+    .update({ status_message_id: messageId })
+    .eq('id', id);
+  if (error) throw new Error(`status_message_id yozishda xato: ${error.message}`);
+}
+
+/**
+ * Status xabari ID'si — worker uni ish OXIRIDA o'qiydi: job band qilingan
+ * paytda bot hali kartani yubormagan bo'lishi mumkin.
+ */
+export async function getStatusMessageId(id: number): Promise<number | null> {
+  if (!hasMigration0004()) return null;
+  const { data, error } = await supabase
+    .from('requests')
+    .select('status_message_id')
+    .eq('id', id)
+    .maybeSingle<{ status_message_id: number | null }>();
+  if (error) throw new Error(`status_message_id o'qishda xato: ${error.message}`);
+  return data?.status_message_id ?? null;
 }
 
 /**

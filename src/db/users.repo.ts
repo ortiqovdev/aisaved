@@ -1,7 +1,8 @@
 import { randomInt } from 'node:crypto';
-import { supabase } from './supabase.ts';
+import { hasMigration0003, supabase } from './supabase.ts';
 import type { UserRow } from './types.ts';
 import { logger } from '../lib/logger.ts';
+import type { Lang } from '../i18n/index.ts';
 
 /** Chalkashmaydigan alifbo: 0/O, 1/I/L yo'q. */
 const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
@@ -88,6 +89,8 @@ interface UpsertInput {
   telegramId: number;
   username?: string | undefined;
   firstName?: string | undefined;
+  /** Yangi user yaratilganda yoziladigan til. */
+  language?: Lang | undefined;
 }
 
 /**
@@ -132,6 +135,7 @@ export async function getOrCreateByTelegramId(input: UpsertInput): Promise<UserR
       telegram_first_name: input.firstName ?? null,
       link_code: linkCode,
       link_status: 'pending',
+      ...(hasMigration0003() && input.language ? { language: input.language } : {}),
     })
     .select('*')
     .single<UserRow>();
@@ -195,6 +199,20 @@ export async function linkUserByCode(code: string, igScopedId: string): Promise<
 
   if (error) throw new Error(`Bog'lashda xato: ${error.message}`);
   return data;
+}
+
+/**
+ * Foydalanuvchi tilini saqlaydi.
+ * @returns false — 0003 migratsiyasi qo'llanmagan (ustun yo'q)
+ */
+export async function setLanguage(telegramId: number, lang: Lang): Promise<boolean> {
+  if (!hasMigration0003()) return false;
+  const { error } = await supabase
+    .from('users')
+    .update({ language: lang })
+    .eq('telegram_id', telegramId);
+  if (error) throw new Error(`Tilni saqlashda xato: ${error.message}`);
+  return true;
 }
 
 /** /unlink — IGSID tozalanadi va yangi kod beriladi. */

@@ -1,13 +1,19 @@
+import type { LocalizedText } from '../i18n/index.ts';
+
 /**
  * Qayta urinib ko'rish MA'NOSIZ bo'lgan xatolar.
  * Worker bunday xatoda darhol `failed` qiladi (retry qilmaydi).
  * Masalan: media URL muddati o'tgan, fayl juda katta, user o'chirilgan.
  */
 export class PermanentError extends Error {
-  /** Foydalanuvchiga Telegram orqali ko'rsatiladigan matn (ixtiyoriy). */
-  readonly userMessage: string | undefined;
+  /**
+   * Foydalanuvchiga Telegram orqali ko'rsatiladigan xabar (ixtiyoriy).
+   * Tayyor matn emas, kalit: xato chiqqan joyda foydalanuvchi tili noma'lum,
+   * tarjimani worker qiladi.
+   */
+  readonly userMessage: LocalizedText | undefined;
 
-  constructor(message: string, userMessage?: string) {
+  constructor(message: string, userMessage?: LocalizedText) {
     super(message);
     this.name = 'PermanentError';
     this.userMessage = userMessage;

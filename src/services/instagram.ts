@@ -84,6 +84,26 @@ export async function trySendInstagramText(igScopedId: string, text: string): Pr
 
 export type SenderAction = 'mark_seen' | 'typing_on' | 'typing_off';
 
+/** `/me/messages` ga POST — natijasi (ok, status, body) chaqiruvchiga qaytadi. */
+async function postMessagesApi(
+  payload: Record<string, unknown>,
+): Promise<{ ok: boolean; status: number; body: string }> {
+  const res = await fetchWithTimeout(
+    `${env.IG_GRAPH_BASE_URL}/me/messages`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${env.IG_ACCESS_TOKEN}`,
+      },
+      body: JSON.stringify(payload),
+    },
+    10_000,
+  );
+  const body = res.ok ? '' : await res.text().catch(() => '');
+  return { ok: res.ok, status: res.status, body };
+}
+
 /**
  * "Ko'rildi" belgisi va "yozmoqda..." indikatori.
  * Foydalanuvchi javob kutayotganini bilib turadi — bu yerda xato bo'lsa
@@ -99,24 +119,64 @@ export async function trySendInstagramAction(
   }
 
   try {
-    const res = await fetchWithTimeout(
-      `${env.IG_GRAPH_BASE_URL}/me/messages`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${env.IG_ACCESS_TOKEN}`,
-        },
-        body: JSON.stringify({ recipient: { id: igScopedId }, sender_action: action }),
-      },
-      10_000,
-    );
+    const res = await postMessagesApi({ recipient: { id: igScopedId }, sender_action: action });
     if (!res.ok) {
       logger.debug({ igScopedId, action, status: res.status }, 'sender_action qabul qilinmadi');
     }
   } catch (e) {
     logger.debug({ igScopedId, action, err: errMessage(e) }, 'sender_action yuborilmadi');
   }
+}
+
+/**
+ * Foydalanuvchi yuborgan reels'ga qo'yiladigan reaksiya.
+ *
+ * Instagram'da video yuborgan foydalanuvchiga matnli javob yozmaymiz —
+ * natija Telegram'ga boradi. Instagram tomonda esa holat faqat reaksiya
+ * bilan bildiriladi: hammasi joyida bo'lsa ✅, har qanday muammoda ❌.
+ * (API emoji'ni to'g'ridan-to'g'ri qabul qiladi; "like" kabi nomlar esa
+ * "Invalid reaction" bilan rad etiladi.)
+ */
+export const IG_REACTION = { ok: '✅', fail: '❌' } as const;
+export type IgReaction = (typeof IG_REACTION)[keyof typeof IG_REACTION];
+
+/** Reaksiya qo'yadi. Xato asosiy oqimni to'xtatmaydi — faqat log qilinadi. */
+export async function trySendInstagramReaction(
+  igScopedId: string,
+  messageId: string,
+  reaction: IgReaction,
+): Promise<void> {
+  if (env.MOCK_INSTAGRAM) {
+    logger.info({ igScopedId, reaction }, '💬 [MOCK] Instagram reaksiya (haqiqatda qo\'yilmadi)');
+    return;
+  }
+
+  try {
+    const res = await postMessagesApi({
+      recipient: { id: igScopedId },
+      sender_action: 'react',
+      payload: { message_id: messageId, reaction },
+    });
+    if (res.ok) {
+      logger.debug({ igScopedId, reaction }, 'Instagram reaksiya qo\'yildi');
+    } else {
+      logger.warn(
+        { igScopedId, reaction, status: res.status, body: res.body.slice(0, 300) },
+        'Instagram reaksiya qabul qilinmadi',
+      );
+    }
+  } catch (e) {
+    logger.warn({ igScopedId, reaction, err: errMessage(e) }, 'Instagram reaksiya yuborilmadi');
+  }
+}
+
+/**
+ * `requests.ig_message_id` Instagram DM'ning `mid` i bo'lsagina reaksiya
+ * qo'yish mumkin. Telegram'dan kelgan so'rovlarda u `tg:` bilan boshlanadi.
+ */
+export function instagramMessageIdOf(igMessageId: string | null): string | null {
+  if (!igMessageId || igMessageId.startsWith('tg:')) return null;
+  return igMessageId;
 }
 
 // ---------------------------------------------------------------------------

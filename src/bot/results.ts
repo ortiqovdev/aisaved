@@ -2,6 +2,7 @@ import { InlineKeyboard } from 'grammy';
 import type { SongInfo } from '../services/audd.ts';
 import { buildQuery, searchTracks, type DeezerTrack } from '../services/deezer.ts';
 import { escapeHtml } from './messages.ts';
+import { t, type Lang } from '../i18n/index.ts';
 
 /** Inline tugma callback prefiksi: preview yuborish. */
 export const PREVIEW_PREFIX = 'pv';
@@ -100,12 +101,10 @@ function formatDuration(sec: number): string {
  *              preview audio fayl sifatida yuboriladi
  *   🎧/🍎/🔗 — to'liq qo'shiqni tinglash uchun platforma havolalari
  */
-export async function buildSongMessage(song: SongInfo | null): Promise<SongMessage> {
+export async function buildSongMessage(song: SongInfo | null, lang: Lang): Promise<SongMessage> {
   if (!song) {
     return {
-      text:
-        '🎵 Musiqa aniqlanmadi.\n' +
-        '<i>Ba\'zan reels\'da original ovoz, gapirish yoki juda qisqa parcha bo\'ladi.</i>',
+      text: t(lang, 'songNotDetected'),
       keyboard: undefined,
       coverUrl: null,
     };
@@ -124,7 +123,7 @@ export async function buildSongMessage(song: SongInfo | null): Promise<SongMessa
 
   const lines = [...header];
   if (versions.length > 0) {
-    lines.push('', '<b>Versiyalar</b> — tinglash uchun raqamni bosing:');
+    lines.push('', t(lang, 'versionsHeader'));
     versions.forEach((t, i) => {
       const num = NUMBER_EMOJI[i] ?? `${i + 1}.`;
       const album = t.album ? ` · <i>${escapeHtml(clip(t.album))}</i>` : '';
@@ -143,19 +142,23 @@ export async function buildSongMessage(song: SongInfo | null): Promise<SongMessa
 
   return {
     text: lines.join('\n'),
-    keyboard: buildKeyboard(song, versions),
+    keyboard: buildKeyboard(song, versions, lang),
     coverUrl: song.coverUrl ?? versions[0]?.coverUrl ?? null,
   };
 }
 
-function buildKeyboard(song: SongInfo, versions: DeezerTrack[]): InlineKeyboard | undefined {
+function buildKeyboard(
+  song: SongInfo,
+  versions: DeezerTrack[],
+  lang: Lang,
+): InlineKeyboard | undefined {
   const kb = new InlineKeyboard();
   let hasAny = false;
 
-  // 1-qator: versiya raqamlari
+  // 1-qator: versiya raqamlari — asosiy harakat, shuning uchun yashil (`success`)
   if (versions.length > 0) {
-    versions.forEach((t, i) => {
-      kb.text(NUMBER_EMOJI[i] ?? String(i + 1), `${PREVIEW_PREFIX}:${t.id}`);
+    versions.forEach((track, i) => {
+      kb.text(NUMBER_EMOJI[i] ?? String(i + 1), `${PREVIEW_PREFIX}:${track.id}`).success();
     });
     kb.row();
     hasAny = true;
@@ -166,7 +169,7 @@ function buildKeyboard(song: SongInfo, versions: DeezerTrack[]): InlineKeyboard 
   if (song.spotifyUrl) links.push(['🎧 Spotify', song.spotifyUrl]);
   if (song.appleUrl) links.push(['🍎 Apple Music', song.appleUrl]);
   if (versions[0]?.link) links.push(['💜 Deezer', versions[0].link]);
-  if (links.length === 0 && song.link) links.push(['🔗 Tinglash', song.link]);
+  if (links.length === 0 && song.link) links.push([t(lang, 'btnListen'), song.link]);
 
   for (const [label, url] of links) kb.url(label, url);
   if (links.length > 0) {
@@ -176,7 +179,7 @@ function buildKeyboard(song: SongInfo, versions: DeezerTrack[]): InlineKeyboard 
 
   // 3-qator: YouTube'da qidirish
   kb.url(
-    '🔍 YouTube\'da qidirish',
+    t(lang, 'btnYoutube'),
     `https://www.youtube.com/results?search_query=${encodeURIComponent(buildQuery(song.artist, song.title))}`,
   );
   hasAny = true;

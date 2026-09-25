@@ -3,6 +3,7 @@ import path from 'node:path';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { TransientError, PermanentError, fetchWithTimeout, errMessage } from '../lib/errors.ts';
+import { msg } from '../i18n/index.ts';
 
 const AUDD_ENDPOINT = 'https://api.audd.io/';
 
@@ -64,7 +65,7 @@ export async function identifySong(filePath: string): Promise<SongInfo | null> {
     if (res.status === 429 || res.status >= 500) {
       throw new TransientError(`AudD ${res.status}: ${text.slice(0, 300)}`);
     }
-    throw new PermanentError(`AudD ${res.status}: ${text.slice(0, 300)}`);
+    throw new PermanentError(`AudD ${res.status}: ${text.slice(0, 300)}`, msg('songServiceDown'));
   }
 
   let json: AuddResponse;
@@ -76,12 +77,18 @@ export async function identifySong(filePath: string): Promise<SongInfo | null> {
 
   if (json.status === 'error') {
     const code = json.error?.error_code;
-    const msg = json.error?.error_message ?? 'noma\'lum xato';
+    const message = json.error?.error_message ?? 'noma\'lum xato';
 
-    // 900 = noto'g'ri API token — retry qilish foydasiz
-    if (code === 900) throw new PermanentError(`AudD tokeni yaroqsiz: ${msg}`);
+    // 900 = token yaroqsiz yoki trial/obuna tugagan — retry qilish foydasiz.
+    // Yangilash: dashboard.audd.io
+    if (code === 900) {
+      throw new PermanentError(
+        `AudD tokeni yaroqsiz yoki obuna tugagan (dashboard.audd.io): ${message}`,
+        msg('songServiceDown'),
+      );
+    }
     // 901 = kunlik limit tugadi — keyinroq qayta urinish mumkin
-    if (code === 901) throw new TransientError(`AudD limiti tugadi: ${msg}`);
+    if (code === 901) throw new TransientError(`AudD limiti tugadi: ${message}`);
 
     /**
      * 300 = "Recognition failed: problem with creating an audio fingerprint".
@@ -95,7 +102,7 @@ export async function identifySong(filePath: string): Promise<SongInfo | null> {
       return null;
     }
 
-    throw new TransientError(`AudD xatosi (${code}): ${msg}`);
+    throw new TransientError(`AudD xatosi (${code}): ${message}`);
   }
 
   if (!json.result) {

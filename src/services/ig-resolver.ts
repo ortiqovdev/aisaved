@@ -1,6 +1,7 @@
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { PermanentError, TransientError, errMessage, fetchWithTimeout } from '../lib/errors.ts';
+import { msg } from '../i18n/index.ts';
 
 /**
  * Instagram havolasidan video faylini topib beruvchi qatlam.
@@ -21,11 +22,14 @@ import { PermanentError, TransientError, errMessage, fetchWithTimeout } from '..
 
 /** Havoladan ajratilgan media. */
 export interface ResolvedMedia {
-  /** To'g'ridan-to'g'ri yuklab olinadigan video havolasi. */
-  videoUrl: string;
+  /**
+   * To'g'ridan-to'g'ri yuklab olinadigan fayllar, postdagi tartibda.
+   * Reels — bitta video; karusel — bir nechta rasm/video. Rasm yoki video
+   * ekani yuklab olinganda `content-type` bo'yicha aniqlanadi.
+   */
+  urls: string[];
   title: string | null;
   author: string | null;
-  thumbnailUrl: string | null;
 }
 
 /** Resolver ulanganmi? Bot javob matnini shunga qarab tanlaydi. */
@@ -122,8 +126,7 @@ export async function resolveInstagramMedia(link: string): Promise<ResolvedMedia
   if (!isResolverConfigured()) {
     throw new PermanentError(
       'IG_RESOLVER_URL sozlanmagan — havoladan video olib bo\'lmaydi',
-      '⚙️ Havola orqali yuklash hozircha yoqilmagan.\n\n' +
-        'Videoni menga to\'g\'ridan-to\'g\'ri tashlasangiz, musiqasini darhol aytaman.',
+      msg('linkDisabled'),
     );
   }
 
@@ -154,12 +157,12 @@ export async function resolveInstagramMedia(link: string): Promise<ResolvedMedia
     if (res.status === 401 || res.status === 403) {
       throw new PermanentError(
         `Resolver ${res.status} (kalit/obuna): ${snippet}`,
-        '⚙️ Yuklash xizmatiga ulanib bo\'lmadi. Birozdan so\'ng qayta urinib ko\'ring.',
+        msg('errResolverUnavailable'),
       );
     }
     throw new PermanentError(
       `Resolver ${res.status}: ${snippet}`,
-      '😕 Bu havoladan videoni ololmadim. Havola to\'g\'ri va post ochiq (public) ekanini tekshiring.',
+      msg('errResolverCantFetch'),
     );
   }
 
@@ -170,25 +173,94 @@ export async function resolveInstagramMedia(link: string): Promise<ResolvedMedia
     throw new TransientError(`Resolver javobini o'qib bo'lmadi: ${errMessage(e)}`);
   }
 
-  const videoUrl = extractVideoUrl(json);
-  if (!videoUrl) {
+  const urls = extractMediaUrls(json);
+  if (urls.length === 0) {
     logger.warn(
       { link, sample: JSON.stringify(json).slice(0, 400) },
-      'Resolver javobida video havolasi topilmadi',
+      'Resolver javobida media havolasi topilmadi',
     );
     throw new PermanentError(
-      'Resolver javobida video havolasi yo\'q',
-      '😕 Bu havolada video topilmadi. Reels yoki video post havolasini yuboring — ' +
-        'rasm postlari va yopiq (private) akkauntlar ishlamaydi.',
+      'Resolver javobida media havolasi yo\'q',
+      msg('errResolverNoVideo'),
     );
   }
 
   return {
-    videoUrl,
+    urls,
     title: pickString(json, env.IG_RESOLVER_TITLE_PATH, ['title', 'caption', 'description']),
     author: pickString(json, '', ['author', 'username', 'owner', 'author_name']),
-    thumbnailUrl: pickString(json, '', ['thumbnail', 'thumbnail_url', 'thumb', 'cover']),
   };
+}
+
+/** Karuselda Instagram ko'pi bilan 20 ta fayl beradi. */
+const MAX_POST_ITEMS = 20;
+
+/** Element obyektidan fayl havolasi olinadigan kalitlar (muhimlik tartibida). */
+const ITEM_URL_KEYS = [
+  'video_url', 'videoUrl', 'download_url', 'downloadUrl', 'url', 'src', 'link',
+  'image_url', 'imageUrl', 'display_url', 'displayUrl',
+];
+
+/** Element turi — `image/jpeg`, `video/mp4`, `photo`, `GraphImage` ... */
+function itemType(item: Record<string, unknown>): string | null {
+  for (const key of ['type', 'media_type', 'mediaType', 'content_type', 'mime', '__typename']) {
+    const v = item[key];
+    if (typeof v === 'string' && /image|photo|video|jpe?g|png|webp|mp4/i.test(v)) return v;
+  }
+  return null;
+}
+
+function itemUrl(item: Record<string, unknown>): string | null {
+  for (const key of ITEM_URL_KEYS) {
+    const v = item[key];
+    if (typeof v === 'string' && /^https?:\/\//i.test(v)) return v;
+  }
+  return null;
+}
+
+/**
+ * Javobdan postdagi BARCHA fayllarni oladi.
+ *
+ * Qiyinchilik: ko'p provayder bitta videoning bir necha SIFATINI ham ro'yxat
+ * qilib beradi (hd, sd...) — ularni karusel deb olsak, bitta video bir necha
+ * marta yuboriladi. Shuning uchun ro'yxat karusel deb faqat har bir elementida
+ * aniq turi (image/video) ko'rsatilgan bo'lsa qabul qilinadi. Aks holda eski,
+ * xavfsiz yo'l: bitta video.
+ */
+function extractMediaUrls(root: unknown): string[] {
+  // 1) `.env` da aniq yo'l ko'rsatilgan bo'lsa — o'sha
+  const configured = valueAtPath(root, env.IG_RESOLVER_VIDEO_PATH);
+  if (typeof configured === 'string' && /^https?:\/\//i.test(configured)) return [configured];
+
+  // 2) Turi ko'rsatilgan elementlar ro'yxati (kenglik bo'yicha — eng tashqisi)
+  const queue: Array<{ node: unknown; depth: number }> = [{ node: root, depth: 0 }];
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()!;
+    if (depth > 6 || node === null || typeof node !== 'object') continue;
+
+    if (Array.isArray(node)) {
+      const objects = node.filter(
+        (x): x is Record<string, unknown> => x !== null && typeof x === 'object' && !Array.isArray(x),
+      );
+      const typed = objects.filter((x) => itemType(x) !== null && itemUrl(x) !== null);
+      if (typed.length > 0 && typed.length === objects.length) {
+        const urls = [...new Set(typed.map((x) => itemUrl(x)!))];
+        return urls.slice(0, MAX_POST_ITEMS);
+      }
+      for (const item of node) queue.push({ node: item, depth: depth + 1 });
+      continue;
+    }
+
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      // Muqova/oldindan ko'rish ro'yxatlari — post fayllari emas
+      if (/thumb|cover|preview|avatar|profile/i.test(key)) continue;
+      queue.push({ node: value, depth: depth + 1 });
+    }
+  }
+
+  // 3) Eski yo'l — bitta video
+  const video = extractVideoUrl(root);
+  return video ? [video] : [];
 }
 
 // ---------------------------------------------------------------------------

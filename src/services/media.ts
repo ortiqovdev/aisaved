@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { PermanentError, TransientError, errMessage, fetchWithTimeout } from '../lib/errors.ts';
+import { msg } from '../i18n/index.ts';
 
 export async function ensureTmpDir(): Promise<string> {
   await fsp.mkdir(env.TMP_DIR, { recursive: true });
@@ -95,6 +97,13 @@ export interface DownloadedFile {
 export interface DownloadOptions {
   /** Telegram'dan kelgan ovozli xabar / audio fayllar uchun. Instagram'da — false. */
   allowAudio?: boolean;
+  /** Instagram rasm postlari va karuseldagi rasmlar uchun. Musiqa ishida — false. */
+  allowImage?: boolean;
+}
+
+/** Yuklab olingan fayl Telegram'ga rasm sifatida yuboriladimi yoki video. */
+export function isImageContentType(contentType: string | null): boolean {
+  return (contentType?.split(';')[0]?.trim().toLowerCase() ?? '').startsWith('image/');
 }
 
 export async function downloadMedia(
@@ -110,7 +119,7 @@ export async function downloadMedia(
     if (res.status === 403 || res.status === 404 || res.status === 410) {
       throw new PermanentError(
         `Media URL amal qilmaydi (${res.status})`,
-        '⏳ Bu videoning havolasi eskirgan. Iltimos, reels\'ni Instagram\'da qaytadan yuboring.',
+        msg('errLinkExpired'),
       );
     }
     if (res.status === 429 || res.status >= 500) {
@@ -120,11 +129,12 @@ export async function downloadMedia(
   }
 
   const contentType = res.headers.get('content-type');
-  assertMediaContentType(contentType, url, options.allowAudio ?? false);
+  assertMediaContentType(contentType, url, options);
 
+  // Karuselda bir job bir necha fayl yuklaydi — nomlar to'qnashmasin
   const filePath = path.join(
     env.TMP_DIR,
-    `media-${requestId}-${Date.now()}${extensionFor(contentType)}`,
+    `media-${requestId}-${Date.now()}-${randomUUID().slice(0, 8)}${extensionFor(contentType)}`,
   );
 
   // Server hajmni oldindan aytsa — behuda yuklamaymiz
@@ -132,7 +142,10 @@ export async function downloadMedia(
   if (declared > 0 && declared > env.MAX_VIDEO_BYTES) {
     throw new PermanentError(
       `Video juda katta: ${declared} bayt`,
-      `📦 Video hajmi juda katta (${formatBytes(declared)}). Telegram bot orqali ${formatBytes(env.MAX_VIDEO_BYTES)} dan kattasini yuborib bo'lmaydi.`,
+      msg('errVideoTooBig', {
+        size: formatBytes(declared),
+        limit: formatBytes(env.MAX_VIDEO_BYTES),
+      }),
     );
   }
   if (!res.body) throw new TransientError('Media javobida body yo\'q');
@@ -155,7 +168,7 @@ export async function downloadMedia(
     if (e instanceof PermanentError) {
       throw new PermanentError(
         e.message,
-        `📦 Video hajmi ${formatBytes(env.MAX_VIDEO_BYTES)} dan katta — Telegram orqali yuborib bo'lmaydi.`,
+        msg('errVideoOverLimit', { limit: formatBytes(env.MAX_VIDEO_BYTES) }),
       );
     }
     throw new TransientError(`Videoni saqlashda xato: ${errMessage(e)}`);
@@ -183,25 +196,26 @@ export async function downloadMedia(
 function assertMediaContentType(
   contentType: string | null,
   url: string,
-  allowAudio: boolean,
+  options: DownloadOptions,
 ): void {
   if (!contentType) return; // sarlavha yo'q bo'lsa — to'sib qo'ymaymiz
 
   const type = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
 
   if (type.startsWith('video/') || type === 'application/octet-stream') return;
-  if (allowAudio && type.startsWith('audio/')) return;
+  if (options.allowAudio && type.startsWith('audio/')) return;
+  if (options.allowImage && type.startsWith('image/')) return;
 
   if (type.startsWith('image/')) {
     throw new PermanentError(
       `Video emas, rasm keldi: ${type} (${url.slice(0, 120)})`,
-      '🖼 Bu reels emas, rasm ekan. Musiqani faqat videodan aniqlay olaman.',
+      msg('errImageNotVideo'),
     );
   }
 
   throw new PermanentError(
     `Kutilmagan content-type: ${type} (${url.slice(0, 120)})`,
-    '⏳ Video havolasi ishlamadi — ehtimol muddati o\'tgan. Reels\'ni qaytadan yuboring.',
+    msg('errBadMediaLink'),
   );
 }
 
@@ -209,6 +223,14 @@ function assertMediaContentType(
 function extensionFor(contentType: string | null): string {
   const type = contentType?.split(';')[0]?.trim().toLowerCase() ?? '';
   switch (type) {
+    case 'image/jpeg':
+      return '.jpg';
+    case 'image/png':
+      return '.png';
+    case 'image/webp':
+      return '.webp';
+    case 'image/heic':
+      return '.heic';
     case 'video/quicktime':
       return '.mov';
     case 'video/webm':
@@ -383,6 +405,75 @@ export async function extractAudioSnippet(
   }
 
   return audioPath;
+}
+
+/** Telegram dumaloq video (video note) cheklovlari. */
+export const VIDEO_NOTE_SIZE = 640;
+export const VIDEO_NOTE_MAX_SECONDS = 60;
+
+export interface VideoNoteFile {
+  filePath: string;
+  /** Natija davomiyligi (sekund, butun) — sendVideoNote `duration` uchun. */
+  duration: number;
+  /** Asl video 60 soniyadan uzun edi — boshidan 60 soniya olindi. */
+  trimmed: boolean;
+}
+
+/**
+ * Videoni Telegram dumaloq xabari (video note) formatiga o'giradi.
+ *
+ * Telegram talabi: kvadrat, H.264, ko'pi bilan 60 soniya. Shuning uchun
+ * markazdan kvadrat kesiladi (reels 9:16 — tepa va pastdan qirqiladi),
+ * 640×640 ga keltiriladi va 60 soniyadan keyingi qism tashlanadi.
+ * Ovoz ixtiyoriy (`0:a:0?`) — ovozsiz GIF/video ham ishlaydi.
+ *
+ * @throws Error — ffmpeg o'chirilgan yoki o'girib bo'lmadi
+ */
+export async function makeVideoNote(inputPath: string): Promise<VideoNoteFile> {
+  if (!env.USE_FFMPEG) throw new Error('USE_FFMPEG=false — video note yasab bo\'lmaydi');
+
+  const sourceDuration = await probeDurationSeconds(inputPath);
+  const trimmed = sourceDuration !== null && sourceDuration > VIDEO_NOTE_MAX_SECONDS;
+
+  const outPath = path.join(
+    path.dirname(inputPath),
+    `${path.basename(inputPath, path.extname(inputPath))}-round.mp4`,
+  );
+  const size = VIDEO_NOTE_SIZE;
+  const args = [
+    '-hide_banner',
+    '-loglevel', 'error',
+    '-y',
+    '-i', inputPath,
+    '-t', String(VIDEO_NOTE_MAX_SECONDS),
+    '-map', '0:v:0',
+    '-map', '0:a:0?',
+    '-vf', `crop='min(iw,ih)':'min(iw,ih)',scale=${size}:${size}:flags=lanczos,setsar=1,fps=30`,
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '26',
+    '-pix_fmt', 'yuv420p',
+    '-profile:v', 'main',
+    '-c:a', 'aac',
+    '-b:a', '96k',
+    '-ac', '2',
+    '-movflags', '+faststart',
+    outPath,
+  ];
+
+  try {
+    await runCommand(env.FFMPEG_PATH, args, 180_000);
+  } catch (e) {
+    await safeUnlink(outPath);
+    throw e;
+  }
+
+  const outDuration = await probeDurationSeconds(outPath);
+  const duration = Math.max(
+    1,
+    Math.round(outDuration ?? Math.min(sourceDuration ?? 1, VIDEO_NOTE_MAX_SECONDS)),
+  );
+  return { filePath: outPath, duration, trimmed };
 }
 
 interface RunOptions {

@@ -16,7 +16,10 @@
     "worker:prod": "node dist/worker-standalone.js",
     "mock:text": "node src/dev/mock-cli.ts text",
     "mock:reel": "node src/dev/mock-cli.ts reel",
-    "test:resolver": "node tests/ig-resolver.test.mjs"
+    "test:resolver": "node tests/ig-resolver.test.mjs",
+    "test:i18n": "node tests/i18n.test.mjs",
+    "test:round": "node tests/video-note.test.mjs",
+    "bot:profile": "node src/scripts/sync-bot-profile.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

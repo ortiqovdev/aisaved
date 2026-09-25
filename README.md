@@ -112,6 +112,11 @@ Manba kodida importlar `.ts` kengaytmasi bilan yozilgan (`allowImportingTsExtens
    Uni o'tkazib yuborsangiz ilova baribir ishlaydi, lekin ishga tushishda ogohlantirish beradi va
    quyidagilar **o'chirilgan** bo'ladi: natija keshi, takror-yuborishdan himoya, tezroq `/health`.
    Migratsiyalar idempotent — bir necha marta ishga tushirish xavfsiz.
+   So'ng [`supabase/migrations/0003_user_language.sql`](supabase/migrations/0003_user_language.sql) —
+   foydalanuvchi tanlagan til bazada saqlanadi (busiz til faqat xotirada turadi va
+   server qayta ishga tushganda Telegram interfeys tiliga qaytadi).
+   Va [`supabase/migrations/0004_status_message.sql`](supabase/migrations/0004_status_message.sql) —
+   "⏳ Qabul qilindi" kartasi natijaga aylanishi server qayta ishga tushganda ham ishlaydi.
 4. **Project Settings → API** dan oling:
    - `Project URL` → `.env` dagi `SUPABASE_URL`
    - `service_role` **secret** kalit → `SUPABASE_SERVICE_ROLE_KEY`
@@ -132,6 +137,16 @@ Migratsiyalar nima yaratadi:
 
 1. Telegram'da [@BotFather](https://t.me/BotFather) → `/newbot` → nom va username bering.
 2. Berilgan tokenni `.env` dagi `TELEGRAM_BOT_TOKEN` ga yozing.
+3. Bot profili (description va "About" matni, 6 tilda): `npm run bot:profile`.
+   Buyruqlar menyusi server ishga tushganda o'zi o'rnatiladi.
+   Avatar, rasm va Instagram bio matnlari — [`branding/BRAND_KIT.md`](branding/BRAND_KIT.md).
+
+### Tillar
+
+Bot 6 tilda: English (standart), O'zbekcha, Русский, العربية, Қазақша, Türkçe.
+Til foydalanuvchining Telegram interfeys tilidan aniqlanadi va `/language` bilan
+o'zgartiriladi. Matnlar — `src/i18n/locales/*.ts`; yangi kalit qo'shilsa
+`npm run test:i18n` barcha tillarda borligini tekshiradi.
 
 ---
 
@@ -273,6 +288,8 @@ Musiqa topilganda javob quyidagilardan iborat:
 | `/start` | Ro'yxatdan o'tish, bog'lash kodini olish |
 | `/status` | Bog'lanish holati + oxirgi 5 ta so'rov |
 | `/unlink` | Bog'lanishni uzish, yangi kod berish |
+| `/language` | Tilni tanlash |
+| `/round` | Videoga **javob** qilib yozilsa — o'sha videodan dumaloq video xabar (video note) yasaydi: markazdan kvadrat, 640×640, ko'pi bilan 60 soniya. Bot yuborgan natija videosi uchun ham ishlaydi |
 | `/help` | Yordam |
 
 ---
@@ -289,8 +306,13 @@ src/
   db/users.repo.ts         → link_code generatsiyasi, bog'lash/uzish
   db/requests.repo.ts      → navbat: enqueue / claimNext / markDone / requeue
   lib/constants.ts         → aylanma importsiz umumiy konstantalar
-  bot/index.ts             → grammy: /start /status /unlink /help + media qabul qilish
-  bot/messages.ts          → barcha matnlar (HTML escape bilan)
+  bot/index.ts             → grammy: /start /status /language /unlink /help + media qabul qilish
+  bot/messages.ts          → o'zgaruvchili xabarlar yig'ish, HTML escape
+  bot/round.ts             → /round: videodan dumaloq video (fonda, ffmpeg)
+  i18n/index.ts            → tillar ro'yxati, t(), tilni aniqlash
+  i18n/locales/*.ts        → barcha matnlar (en — manba, qolganlari tarjima)
+  i18n/user-lang.ts        → foydalanuvchi tili: kesh + baza
+  scripts/sync-bot-profile.ts → bot description'larini 6 tilda o'rnatish
   bot/notify.ts            → videoni caption bilan yuborish
   bot/results.ts           → natija xabari: versiyalar, muqova, inline tugmalar
   webhook/instagram.ts     → GET verify + POST receive (imzo tekshiruvi bilan)
@@ -307,6 +329,8 @@ src/
   worker-standalone.ts     → faqat worker (alohida masshtablash uchun)
 supabase/migrations/0001_init.sql
 supabase/migrations/0002_fixes.sql
+supabase/migrations/0003_user_language.sql
+supabase/migrations/0004_status_message.sql
 ```
 
 ---
