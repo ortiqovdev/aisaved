@@ -476,19 +476,20 @@ export async function makeVideoNote(inputPath: string): Promise<VideoNoteFile> {
   return { filePath: outPath, duration, trimmed };
 }
 
-interface RunOptions {
+export interface RunOptions {
   /** true bo'lsa nolga teng bo'lmagan exit kod xato hisoblanmaydi (probe uchun). */
   allowFailure?: boolean;
 }
 
-function runCommand(
+export function runCommand(
   cmd: string,
   args: string[],
   timeoutMs: number,
   options: RunOptions = {},
-): Promise<{ stderr: string }> {
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { windowsHide: true });
+    let stdout = '';
     let stderr = '';
     // `error` va `close` ikkisi ham chiqishi mumkin — promise bir marta hal bo'ladi
     let settled = false;
@@ -503,8 +504,11 @@ function runCommand(
       settle(() => reject(new Error(`${cmd} ${timeoutMs}ms ichida tugamadi`)));
     }, timeoutMs);
 
+    // Cheklov: buzilgan fayl megabaytlab log chiqarishi mumkin
+    child.stdout.on('data', (d: Buffer) => {
+      if (stdout.length < 512_000) stdout += d.toString();
+    });
     child.stderr.on('data', (d: Buffer) => {
-      // Cheklov: buzilgan fayl megabaytlab log chiqarishi mumkin
       if (stderr.length < 64_000) stderr += d.toString();
     });
     child.on('error', (err) => {
@@ -513,7 +517,7 @@ function runCommand(
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (code === 0 || options.allowFailure) settle(() => resolve({ stderr }));
+      if (code === 0 || options.allowFailure) settle(() => resolve({ stdout, stderr }));
       else {
         settle(() =>
           reject(new Error(`${cmd} kod ${code} bilan tugadi: ${stderr.slice(0, 300)}`)),

@@ -6,10 +6,10 @@ export const ru: Messages = {
   cmdUnlink: `Отвязать Instagram`,
   cmdLanguage: `Сменить язык`,
   cmdHelp: `Помощь`,
-  botShortDescription: `Найду песню из любого Reels в Instagram. Пришлите ссылку или видео — получите название, видео и ссылки.`,
+  botShortDescription: `Скачивайте видео из Reels, TikTok, Shorts и Pinterest и узнавайте песню в них. Пришлите ссылку.`,
   botDescription: `🎵 Услышали классную песню в Reels? Я скажу, что это за трек.
 
-• Пришлите ссылку на Reels — верну видео и название песни
+• Пришлите ссылку из Instagram, TikTok, YouTube Shorts или Pinterest — верну видео
 • Или отправьте любое видео, голосовое или аудио (до 20 МБ)
 • Или поделитесь Reels с @{account} в Instagram
 
@@ -44,7 +44,7 @@ export const ru: Messages = {
   help: `<b>Три способа найти песню</b>
 
 <b>1️⃣ Пришлите ссылку — самый удобный</b>
-В Instagram под Reels нажмите <b>Поделиться → Копировать ссылку</b> и вставьте её сюда.
+В Instagram, TikTok, YouTube Shorts или Pinterest нажмите <b>Поделиться → Копировать ссылку</b> и вставьте её сюда — или поделитесь сразу в этот бот.
 Скачаю видео, фото или весь пост — а по кнопке найду и песню. Привязка не нужна.
 
 <b>2️⃣ Отправьте видео напрямую</b>
@@ -55,6 +55,10 @@ export const ru: Messages = {
 Поделитесь Reels с @{account} в Instagram.
 Для этого один раз привяжите аккаунт: /start
 <i>Примечание: Instagram не отдаёт файл некоторых Reels — в таком случае попрошу ссылку (способ 1).</i>
+
+<b>👥 В группах и любом чате</b>
+Добавьте меня в группу — я буду скачивать ссылки, которые там публикуют.
+В любом чате напишите <code>@{bot} ссылка</code> — и отправьте видео, не выходя из чата.
 
 <b>Команды</b>
 /start — получить код привязки Instagram
@@ -112,6 +116,13 @@ export const ru: Messages = {
   photoReadyCaption: `✅ Вот ваше фото.`,
   albumReadyCaption: `✅ Весь пост — файлов: {n}.`,
 
+  // ---------- Platformalar, guruhlar, inline ----------
+  groupHello: `👋 Привет! Кидайте в этот чат ссылки на Instagram, TikTok, YouTube Shorts или Pinterest — я выложу видео прямо здесь.`,
+  groupNeedsAdmin: `ℹ️ Чтобы я видел ссылки в группе, сделайте меня админом — особые права не нужны.`,
+  inlineOpenBot: `📥 Скачать в боте`,
+  errPlatformUnavailable: `⚙️ Скачивание с этой платформы сейчас недоступно. Попробуйте позже.`,
+  errVideoTooLong: `⏱ Видео слишком длинное — я скачиваю ролики до 10 минут.`,
+
   mediaNotFound: `🤔 В этом файле нет видео или аудио. Пришлите Reels, видео или голосовое.`,
   fileTooBig20: `📦 Файл больше 20 МБ — Telegram-боты не могут скачивать такие файлы.
 
@@ -126,7 +137,7 @@ export const ru: Messages = {
   unknownCommand: `Такой команды нет. Смотрите /help.`,
   textMenu: `Пришлите мне что-нибудь из этого 👇
 
-🔗 <b>Ссылка Instagram</b> — на Reels или видеопост
+🔗 <b>Ссылка</b> — Instagram, TikTok, YouTube Shorts или Pinterest
 🎬 <b>Видео или аудио</b> — прямо сюда (до 20 МБ)
 
 📸 Или поделитесь Reels с <b>@{account}</b> в Instagram.

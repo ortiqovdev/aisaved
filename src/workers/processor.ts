@@ -15,20 +15,25 @@ import {
   safeUnlink,
   snippetOffsets,
 } from '../services/media.ts';
-import { identifySong, type SongInfo } from '../services/audd.ts';
-import { resolveTelegramFileUrl } from '../services/telegram-files.ts';
+import { auddAvailable, identifySong, type SongInfo } from '../services/audd.ts';
+import { identifyWithShazam } from '../services/shazam.ts';
 import {
-  resolveInstagramMedia,
-  type MediaKind,
-  type ResolvedItem,
-} from '../services/ig-resolver.ts';
+  getSongCache,
+  putSongCache,
+  songCacheAvailable,
+  type SongLookup,
+} from '../db/song-cache.repo.ts';
+import { resolveTelegramFileUrl } from '../services/telegram-files.ts';
+import type { MediaKind } from '../services/ig-resolver.ts';
+import { formatMusic, resolvePost, type MusicTag, type ResolvedPost } from '../services/resolvers.ts';
+import { platformOfMediaType } from '../services/links.ts';
 import {
   IG_REACTION,
   instagramMessageIdOf,
   trySendInstagramReaction,
   type IgReaction,
 } from '../services/instagram.ts';
-import { IG_LINK_SOURCE, TELEGRAM_SOURCE } from '../lib/constants.ts';
+import { TELEGRAM_SOURCE } from '../lib/constants.ts';
 import { msg, type Lang } from '../i18n/index.ts';
 import { langOfUser } from '../i18n/user-lang.ts';
 import { deliverMedia, deliverSong, fromDownloaded, type OutMedia } from '../bot/notify.ts';
@@ -57,10 +62,11 @@ export async function processRequest(job: RequestRow): Promise<void> {
 
   // Media uch manbadan kelishi mumkin:
   //   telegram_file → foydalanuvchi faylni botga tashlagan (video unda bor)
-  //   ig_link       → Instagram havolasi (video resolver orqali topiladi)
+  //   *_link        → Instagram/TikTok/YouTube/Pinterest havolasi (resolver)
   //   ig_reel/...   → Instagram DM webhook'i (CDN havolasi payloadda keladi)
   const fromTelegram = job.media_type === TELEGRAM_SOURCE;
-  const fromLink = job.media_type === IG_LINK_SOURCE;
+  // Guruhda kelgan so'rov natijasi guruhning o'ziga boradi
+  const chatId = targetChatOf(job, user.telegram_id);
 
   /**
    * Natija allaqachon yuborilgan bo'lsa — ikkinchi marta yubormaymiz.
@@ -97,42 +103,23 @@ export async function processRequest(job: RequestRow): Promise<void> {
   const replyTo = fromTelegram ? telegramMessageIdOf(job.ig_message_id) : undefined;
 
   try {
-    // 0) Kesh: ayni fayl avval aniqlangan bo'lsa AudD'ni bezovta qilmaymiz
-    //    (file_unique_id doimiy — bir videoni ko'p odam so'rasa ham bitta so'rov).
-    const cached = fromTelegram ? await lookupCache(job, log) : null;
-    if (cached) {
-      const statusId = await statusCardOf(job.id);
-      await withTelegramErrors(() =>
-        deliverSong(user.telegram_id, cached, lang, statusId, replyTo),
-      );
-      forgetStatusCard(job.id);
-      await requestsRepo.markDelivered(job.id, {
-        song_title: cached.title,
-        song_artist: cached.artist,
-        song_album: cached.album,
-        song_link: cached.link,
-      });
-      log.info({ song: cached.title }, 'Job keshdan yakunlandi (AudD chaqirilmadi)');
-      return;
-    }
-
     let song: SongInfo | null = null;
     if (fromTelegram) {
-      // 1-3) Musiqa: file_id → vaqtinchalik URL (~1 soat) → yuklash → bir
-      //      necha parcha o'rnini sinab aniqlash (reels boshida ko'pincha gap
-      //      yoki sukunat bo'ladi)
-      const url = await resolveTelegramFileUrl(job.media_url);
-      const file = await downloadMedia(url, job.id, { allowAudio: true });
-      tempFiles.push(file.filePath);
-      song = await identifyWithFallback(file.filePath, job, log, tempFiles);
+      // 0) Kesh: ayni fayl avval tekshirilgan bo'lsa (topilgan yoki
+      //    "topilmadi") AudD'ni bezovta qilmaymiz — file_unique_id doimiy.
+      // 1-3) Aks holda: yuklash → bir necha parcha o'rnini sinab aniqlash
+      //      (reels boshida ko'pincha gap yoki sukunat bo'ladi). Bir xil
+      //      faylga bir vaqtdagi so'rovlar bitta AudD chaqiruvini kutadi.
+      const cached = await lookupCache(job, log);
+      song = cached ? cached.song : await recognizeShared(job, log);
 
       const statusId = await statusCardOf(job.id);
       await withTelegramErrors(() =>
-        deliverSong(user.telegram_id, song, lang, statusId, replyTo),
+        deliverSong(chatId, song, lang, statusId, replyTo),
       );
     } else {
       // 1-3) Post: bitta video/rasm yoki butun karusel
-      await deliverPost(job, user.telegram_id, lang, fromLink, log, tempFiles);
+      await deliverPost(job, chatId, lang, log, tempFiles);
     }
     forgetStatusCard(job.id);
 
@@ -154,9 +141,13 @@ export async function processRequest(job: RequestRow): Promise<void> {
   }
 }
 
-/** `ig:<shortcode>` → shortcode (media keshi kaliti). CDN job'larida yo'q. */
-function shortcodeOf(job: RequestRow): string | null {
-  return job.file_unique_id?.startsWith('ig:') ? job.file_unique_id.slice(3) : null;
+/**
+ * Media keshi kaliti: `ig:<shortcode>`, `tt:<id>`, `yt:<id>`, `pin:<id>` ...
+ * (havola job'larida `file_unique_id` ga shu yoziladi). CDN job'larida yo'q.
+ */
+function cacheKeyOf(job: RequestRow): string | null {
+  const key = job.file_unique_id;
+  return key && /^(ig|tt|yt|pin):/.test(key) ? key : null;
 }
 
 /** Webhookdagi CDN havolasi turi: reels/video — video; post/share — noma'lum. */
@@ -165,60 +156,88 @@ function kindOfJob(mediaType: string | null): MediaKind | null {
 }
 
 /**
+ * Natija qaysi chatga boradi: Telegram'dan kelgan so'rov (`tg:<chat>:<msg>`)
+ * o'sha chatga — guruhda guruhning o'ziga; Instagram DM'dan kelgani esa
+ * foydalanuvchining shaxsiy chatiga.
+ */
+export function targetChatOf(job: RequestRow, telegramId: number): number {
+  const chat = Number(job.ig_message_id?.split(':')[1]);
+  return job.ig_message_id?.startsWith('tg:') && Number.isInteger(chat) && chat !== 0
+    ? chat
+    : telegramId;
+}
+
+/**
  * Postni yetkazadi — eng tezidan boshlab:
  *
  *   1. Media keshi — bu post avval yuborilgan: Telegram file_id orqali bir
- *      zumda; RapidAPI ham, yuklab olish ham yo'q.
- *   2. URL orqali — Telegram faylni Instagram CDN'dan o'zi oladi (video ≤20 MB,
+ *      zumda; resolver ham, yuklab olish ham yo'q.
+ *   2. URL orqali — Telegram faylni platforma CDN'idan o'zi oladi (video ≤20 MB,
  *      rasm ≤5 MB). Serverimiz faylni yuklab olmaydi va qayta yuklamaydi.
+ *      TikTok uchun bu yagona yo'l bo'lishi mumkin: CDN'i O'zbekistonda yopiq.
  *   3. Yuklab olib yuborish — URL ishlamasa (katta fayl, turi noma'lum,
- *      CDN Telegram'ni kiritmadi).
+ *      CDN Telegram'ni kiritmadi). YouTube'da yt-dlp faylni o'zi yuklaydi.
  *
- * Yuborilgan fayllarning file_id'lari keshga yoziladi.
+ * Yuborilgan fayllarning file_id'lari (va qo'shiq nomi) keshga yoziladi.
  */
 async function deliverPost(
   job: RequestRow,
   chatId: number,
   lang: Lang,
-  fromLink: boolean,
   log: Logger,
   tempFiles: string[],
 ): Promise<void> {
-  const shortcode = shortcodeOf(job);
+  const key = cacheKeyOf(job);
+  const platform = platformOfMediaType(job.media_type);
+  const replyTo = telegramMessageIdOf(job.ig_message_id);
 
   // 1) Kesh
-  if (shortcode) {
-    const cached = await getMediaCache(shortcode);
+  if (key) {
+    const cached = await getMediaCache(key);
     if (cached) {
       try {
         const items: OutMedia[] = cached.map((c) => ({ kind: c.kind, source: { fileId: c.fileId } }));
-        await deliverMedia(chatId, items, lang, await statusCardOf(job.id));
-        log.info({ shortcode }, 'Post keshdan yuborildi (RapidAPI chaqirilmadi)');
+        await deliverMedia(chatId, items, lang, await statusCardOf(job.id), {
+          replyTo,
+          music: cached[0]?.music,
+        });
+        log.info({ key }, 'Post keshdan yuborildi (resolver chaqirilmadi)');
         return;
       } catch (e) {
         if (!canFallBack(e)) throw toJobError(e);
-        log.warn({ shortcode, err: errMessage(e) }, 'Keshdagi file_id ishlamadi — kesh tozalanadi');
-        await dropMediaCache(shortcode);
+        log.warn({ key, err: errMessage(e) }, 'Keshdagi file_id ishlamadi — kesh tozalanadi');
+        await dropMediaCache(key);
       }
     }
   }
 
-  let items: ResolvedItem[] = [{ url: job.media_url, kind: kindOfJob(job.media_type) }];
-  if (fromLink) {
-    const resolved = await resolveInstagramMedia(job.media_url);
+  let post: ResolvedPost = { items: [{ url: job.media_url, kind: kindOfJob(job.media_type) }] };
+  if (platform) {
+    post = await resolvePost(platform, job.media_url, job.id);
+    tempFiles.push(...(post.downloaded ?? []).map((f) => f.filePath));
     log.info(
-      { files: resolved.items.length, title: resolved.title, author: resolved.author },
+      { platform, files: post.items.length + (post.downloaded?.length ?? 0), music: post.music },
       'Havoladan post topildi',
     );
-    items = resolved.items;
+  }
+  const options = { replyTo, music: formatMusic(post.music) };
+
+  let delivered: CachedMedia[] | null = null;
+
+  // YouTube: fayl allaqachon yuklangan
+  if (post.downloaded?.length) {
+    const statusId = await statusCardOf(job.id);
+    const files = post.downloaded;
+    delivered = await withTelegramErrors(() =>
+      deliverMedia(chatId, fromDownloaded(files), lang, statusId, options),
+    );
   }
 
   // 2) URL orqali — turi hamma fayl uchun ma'lum bo'lsagina
-  let delivered: CachedMedia[] | null = null;
-  if (items.every((i) => i.kind !== null)) {
+  if (!delivered && post.items.every((i) => i.kind !== null)) {
     try {
-      const out: OutMedia[] = items.map((i) => ({ kind: i.kind!, source: { url: i.url } }));
-      delivered = await deliverMedia(chatId, out, lang, await statusCardOf(job.id));
+      const out: OutMedia[] = post.items.map((i) => ({ kind: i.kind!, source: { url: i.url } }));
+      delivered = await deliverMedia(chatId, out, lang, await statusCardOf(job.id), options);
     } catch (e) {
       if (!canFallBack(e)) throw toJobError(e);
       log.info({ err: errMessage(e) }, 'URL orqali ketmadi — yuklab olib yuboramiz');
@@ -227,15 +246,39 @@ async function deliverPost(
 
   // 3) Yuklab olib yuborish
   if (!delivered) {
-    const files = await downloadItems(items.map((i) => i.url), job, log);
+    const files = await downloadItems(post.items.map((i) => i.url), job, log);
     tempFiles.push(...files.map((f) => f.filePath));
     const statusId = await statusCardOf(job.id);
     delivered = await withTelegramErrors(() =>
-      deliverMedia(chatId, fromDownloaded(files), lang, statusId),
+      deliverMedia(chatId, fromDownloaded(files), lang, statusId, options),
     );
   }
 
-  if (shortcode && delivered.length > 0) await putMediaCache(shortcode, delivered);
+  if (key && delivered.length > 0) {
+    const [first, ...rest] = delivered;
+    await putMediaCache(key, first ? [{ ...first, music: formatMusic(post.music) }, ...rest] : rest);
+  }
+
+  // Platforma qo'shiqni aytgan bo'lsa — video ostidagi 🎵 uchun tayyor javob:
+  // bosilganda Shazam ham chaqirilmaydi (kalit — yuborilgan videoning file_unique_id)
+  if (post.music && env.RESULT_CACHE_ENABLED) {
+    for (const d of delivered) {
+      if (d.kind === 'video' && d.fileUniqueId) await putSongCache(d.fileUniqueId, songOfTag(post.music));
+    }
+  }
+}
+
+/** Platforma aytgan qo'shiq → natija (havolalar va muqovani Deezer qidiruvi topadi). */
+function songOfTag(tag: MusicTag): SongInfo {
+  return {
+    title: tag.title,
+    artist: tag.artist || 'Noma\'lum ijrochi',
+    album: null,
+    link: null,
+    spotifyUrl: null,
+    appleUrl: null,
+    coverUrl: null,
+  };
 }
 
 /**
@@ -293,9 +336,18 @@ export async function reactOnInstagram(
  * Avval aniqlangan ayni faylning natijasi (agar bo'lsa).
  * Kesh xatosi asosiy oqimni to'xtatmaydi — shunchaki keshsiz davom etadi.
  */
-async function lookupCache(job: RequestRow, log: Logger): Promise<SongInfo | null> {
+async function lookupCache(job: RequestRow, log: Logger): Promise<SongLookup | null> {
   if (!env.RESULT_CACHE_ENABLED || !job.file_unique_id) return null;
 
+  // Asosiy kesh (0006): to'liq natija yoki "topilmadi"
+  const hit = await getSongCache(job.file_unique_id);
+  if (hit) {
+    log.info({ song: hit.song?.title ?? null }, 'Qo\'shiq keshdan olindi (AudD chaqirilmadi)');
+    return hit;
+  }
+  if (songCacheAvailable()) return null;
+
+  // Eski kesh — 0006 qo'llanmagan bazada: requests jadvalidagi topilganlar
   let row: RequestRow | null = null;
   try {
     row = await requestsRepo.findCachedResult(job.file_unique_id, job.id);
@@ -306,26 +358,73 @@ async function lookupCache(job: RequestRow, log: Logger): Promise<SongInfo | nul
   if (!row?.song_title || !row.song_artist) return null;
 
   log.info({ cachedFrom: row.id, song: row.song_title }, 'Natija keshdan olindi');
-  // Spotify/Apple havolalari va muqova bazada saqlanmaydi — Deezer'dan
+  // Spotify/Apple havolalari va muqova bu yerda saqlanmaydi — Deezer'dan
   // qayta topiladi (results.ts baribir Deezer qidiruvini bajaradi).
   return {
-    title: row.song_title,
-    artist: row.song_artist,
-    album: row.song_album,
-    link: row.song_link,
-    spotifyUrl: null,
-    appleUrl: null,
-    coverUrl: null,
+    song: {
+      title: row.song_title,
+      artist: row.song_artist,
+      album: row.song_album,
+      link: row.song_link,
+      spotifyUrl: null,
+      appleUrl: null,
+      coverUrl: null,
+    },
   };
 }
 
+/** file_unique_id → bajarilayotgan aniqlash (shu jarayon ichida). */
+const recognizing = new Map<string, Promise<SongInfo | null>>();
+
 /**
- * Musiqani aniqlaydi. Videoning bir nechta joyidan parcha olib ko'radi:
- * reels'ning ilk sekundlari ko'pincha gap/sukunat bo'lgani uchun 0-sekunddan
- * olingan parcha bilan natija chiqmasligi mumkin.
+ * Faylni yuklab, qo'shiqni aniqlaydi va natijani keshga yozadi.
  *
- * API xato bersa yoki hech qayerdan topilmasa — oxirgi urinishda video
- * baribir yuboriladi ("musiqa aniqlanmadi" deb yoziladi).
+ * Virusli video ostidagi "🎵" ni bir vaqtda bir necha kishi bossa, AudD
+ * (pullik) bir marta chaqiriladi — qolganlar o'sha natijani kutadi.
+ */
+async function recognizeShared(job: RequestRow, log: Logger): Promise<SongInfo | null> {
+  const key = job.file_unique_id;
+
+  const run = async (): Promise<SongInfo | null> => {
+    const tempFiles: string[] = [];
+    try {
+      // file_id → vaqtinchalik URL (~1 soat) → yuklash
+      const url = await resolveTelegramFileUrl(job.media_url);
+      const file = await downloadMedia(url, job.id, { allowAudio: true });
+      tempFiles.push(file.filePath);
+      const song = await identifyWithFallback(file.filePath, job, log, tempFiles);
+      // Faqat aniq natija keshlanadi: xato bo'lsa identifyWithFallback otadi
+      if (key && env.RESULT_CACHE_ENABLED) await putSongCache(key, song);
+      return song;
+    } finally {
+      for (const f of tempFiles) await safeUnlink(f);
+    }
+  };
+
+  if (!key) return run();
+  const pending = recognizing.get(key);
+  if (pending) {
+    log.info('Shu fayl hozir aniqlanmoqda — o\'sha natija kutiladi');
+    return pending;
+  }
+  const promise = run().finally(() => recognizing.delete(key));
+  recognizing.set(key, promise);
+  return promise;
+}
+
+/**
+ * Musiqani aniqlaydi — bepul manbadan boshlab:
+ *
+ *   1. Shazam (bepul) — videoning bir necha joyidan olingan parchalarda:
+ *      reels boshida ko'pincha gap yoki sukunat bo'ladi, qo'shiq o'rtada.
+ *   2. AudD (pullik zaxira) — faqat yoqilgan (AUDD_ENABLED) va kunlik chegara
+ *      qolgan bo'lsa, faqat bitta — eng istiqbolli (o'rtadagi) parchada.
+ *
+ * Jim parchalar hech qayerga yuborilmaydi.
+ *
+ * @returns qo'shiq; null — hamma manba aniq "topilmadi" dedi
+ * @throws  xizmatlar ishlamadi (tarmoq, Shazam bloklagan, AudD limiti) —
+ *          bu "topilmadi" EMAS: foydalanuvchiga rostini aytamiz
  */
 async function identifyWithFallback(
   mediaPath: string,
@@ -336,62 +435,82 @@ async function identifyWithFallback(
   const snippetLen = env.AUDD_SNIPPET_SECONDS;
   const duration = await probeDurationSeconds(mediaPath);
   const offsets = env.AUDD_MULTI_PASS ? snippetOffsets(duration, snippetLen) : [0];
-
   log.debug({ duration, offsets }, 'Musiqa aniqlash rejasi');
 
-  let lastError: unknown = null;
-  let usedSnippet = false;
-
+  // Ovozi bor parchalar, istiqbol tartibida (o'rta, bosh, oxir)
+  const snippets: string[] = [];
   for (const offset of offsets) {
     const snippet = await extractAudioSnippet(mediaPath, offset, snippetLen);
-    if (snippet) {
-      tempFiles.push(snippet);
-      usedSnippet = true;
-
-      // Jim parchadan AudD barmoq izi yasay olmaydi — so'rovni behuda
-      // sarflamaymiz va keyingi offsetga o'tamiz.
-      const db = await measureLoudnessDb(snippet);
-      if (db !== null && db < SILENCE_THRESHOLD_DB) {
-        log.debug({ offset, db }, 'Parcha jim — AudD\'ga yuborilmadi');
-        continue;
-      }
-    } else if (usedSnippet) {
-      // Oldinroq parcha muvaffaqiyatli ajratilgan, bu offset esa video
-      // tashqarisida — keyingisini sinashning ma'nosi yo'q.
+    if (!snippet) {
+      // ffmpeg yo'q — butun faylni bir marta yuboramiz
+      if (snippets.length === 0 && offset === offsets[0]) snippets.push(mediaPath);
+      break;
+    }
+    tempFiles.push(snippet);
+    const db = await measureLoudnessDb(snippet);
+    if (db !== null && db < SILENCE_THRESHOLD_DB) {
+      log.debug({ offset, db }, 'Parcha jim — o\'tkazib yuborildi');
       continue;
     }
+    snippets.push(snippet);
+  }
+  if (snippets.length === 0) return null; // butunlay jim video
 
-    try {
-      const song = await identifySong(snippet ?? mediaPath);
-      if (song) {
-        if (offset > 0) log.info({ offset }, 'Musiqa videoning o\'rtasidan topildi');
-        return song;
+  let lastError: unknown = null;
+  /** Shazam kamida bitta parchani xatosiz tekshirdi — "topilmadi" ishonchli. */
+  let shazamAnswered = false;
+
+  // 1) Shazam — bepul
+  if (env.SHAZAM_ENABLED) {
+    for (const snippet of snippets) {
+      try {
+        const song = await identifyWithShazam(snippet);
+        shazamAnswered = true;
+        if (song) {
+          log.info({ song: song.title, via: 'shazam' }, 'Qo\'shiq topildi');
+          return song;
+        }
+      } catch (e) {
+        lastError = e;
+        // Bloklangan/ishlamayapti — qolgan parchalarni urinish foydasiz
+        log.warn({ err: errMessage(e) }, 'Shazam ishlamadi');
+        break;
       }
-      log.debug({ offset }, 'Bu parchada musiqa topilmadi');
-    } catch (e) {
-      lastError = e;
-      // Doimiy xato (yaroqsiz token) — boshqa offsetlar ham foydasiz
-      if (e instanceof PermanentError) break;
-      log.debug({ offset, err: errMessage(e) }, 'AudD xatosi — keyingi parcha');
     }
-
-    // ffmpeg yo'q bo'lsa butun faylning o'zi yuborilgan — takrorlash foydasiz
-    if (!snippet) break;
   }
 
-  if (lastError === null) return null; // hamma parcha tekshirildi, musiqa yo'q
+  // 2) AudD — pullik zaxira, bitta parcha
+  if (auddAvailable()) {
+    try {
+      const song = await identifySong(snippets[0]!);
+      if (song) {
+        log.info({ song: song.title, via: 'audd' }, 'Qo\'shiq topildi');
+        return song;
+      }
+      return null;
+    } catch (e) {
+      // Shazam allaqachon aniq "topilmadi" degan bo'lsa — AudD xatosi natijani buzmasin
+      if (shazamAnswered) {
+        log.warn({ err: errMessage(e) }, 'AudD ishlamadi — Shazam natijasi ("topilmadi") qoldi');
+        return null;
+      }
+      lastError = e;
+    }
+  }
+
+  if (lastError === null) return null; // hamma manba aniq "topilmadi" dedi
 
   const isLastAttempt = job.attempts >= env.MAX_ATTEMPTS;
   if (lastError instanceof TransientError && !isLastAttempt) {
-    throw lastError; // butun job qayta urinadi
+    throw lastError; // butun job keyinroq qayta urinadi
   }
 
   /**
-   * Xizmat ishlamayapti (token yaroqsiz, obuna tugagan, limit) — bu "musiqa
-   * topilmadi" EMAS. Ilgari shunday deb ko'rsatilardi va muammo haftalab
-   * sezilmay qolgan edi. Endi foydalanuvchiga rostini aytamiz, logda esa xato.
+   * Xizmat ishlamayapti — bu "musiqa topilmadi" EMAS. Ilgari shunday deb
+   * ko'rsatilardi va muammo haftalab sezilmay qolgan edi. Endi foydalanuvchiga
+   * rostini aytamiz, logda esa xato.
    */
-  log.error({ err: errMessage(lastError) }, 'Musiqa aniqlash xizmati ishlamadi (AudD)');
+  log.error({ err: errMessage(lastError) }, 'Musiqa aniqlash xizmatlari ishlamadi');
   if (lastError instanceof PermanentError) throw lastError;
   throw new PermanentError(errMessage(lastError), msg('songServiceDown'));
 }

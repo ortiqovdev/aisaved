@@ -12,7 +12,7 @@ import { forgetStatusCard, statusCardOf } from '../bot/status-card.ts';
 import { IG_REACTION } from '../services/instagram.ts';
 import { msg, t } from '../i18n/index.ts';
 import { langOfUser } from '../i18n/user-lang.ts';
-import { processRequest, reactOnInstagram } from './processor.ts';
+import { processRequest, reactOnInstagram, targetChatOf } from './processor.ts';
 import { idle } from './wake.ts';
 
 const WORKER_ID = `${os.hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
@@ -130,7 +130,7 @@ async function notifyUserOfFailure(job: RequestRow, e: unknown): Promise<void> {
     if (user) {
       const text = t(langOfUser(user), userMessage.key, userMessage.vars);
       // "Qabul qilindi" kartasi bo'lsa — yangi xabar emas, kartaning matni xatoga almashadi
-      await showFailure(user.telegram_id, text, await statusCardOf(job.id));
+      await showFailure(targetChatOf(job, user.telegram_id), text, await statusCardOf(job.id));
       forgetStatusCard(job.id);
       // Instagram'dan kelgan bo'lsa — reelsga ❌ (sababi Telegram'da yozildi)
       await reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.fail);

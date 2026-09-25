@@ -159,7 +159,11 @@ async function main(): Promise<void> {
   startTmpCleanup();
 
   const me = await getMeWithRetry();
-  setBotInfo({ username: me.username, supportsInline: me.supports_inline_queries });
+  setBotInfo({
+    username: me.username,
+    supportsInline: me.supports_inline_queries,
+    readsGroupMessages: me.can_read_all_group_messages,
+  });
   if (!me.supports_inline_queries) {
     logger.warn(
       'Inline rejim o\'chiq — "Ulashish" tugmasi videoni emas, bot havolasini ulashadi. ' +

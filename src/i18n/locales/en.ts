@@ -13,10 +13,10 @@ export const en = {
   cmdUnlink: `Unlink Instagram`,
   cmdLanguage: `Change language`,
   cmdHelp: `Help`,
-  botShortDescription: `Find the song in any Instagram Reel. Send a link or a video — get the title, the video and listening links.`,
+  botShortDescription: `Download Reels, TikTok, Shorts & Pinterest videos and find the song in them. Send a link to start.`,
   botDescription: `🎵 Heard a great song in a Reel? I'll tell you what it is.
 
-• Send an Instagram Reel link — I'll send back the video and the song
+• Send a link from Instagram, TikTok, YouTube Shorts or Pinterest — I'll send back the video
 • Or drop any video, voice note or audio file (up to 20 MB)
 • Or share Reels to @{account} on Instagram
 
@@ -52,7 +52,7 @@ To unlink: /unlink`,
   help: `<b>Three ways to find a song</b>
 
 <b>1️⃣ Send a link — the easiest</b>
-On Instagram, tap <b>Share → Copy link</b> under a Reel and paste it here.
+Tap <b>Share → Copy link</b> on Instagram, TikTok, YouTube Shorts or Pinterest and paste it here — or share straight to this bot.
 I'll download the video, photo or the whole post — and find the song on request. No linking needed.
 
 <b>2️⃣ Send the video directly</b>
@@ -63,6 +63,10 @@ Send a video, GIF, voice note or audio — I'll reply with the song name.
 Share a Reel to @{account} on Instagram.
 You need to link your account once: /start
 <i>Note: Instagram doesn't provide the file for some Reels — in that case I'll ask you for the link (way 1).</i>
+
+<b>👥 In groups and any chat</b>
+Add me to a group — I'll download links posted there.
+In any chat, type <code>@{bot} link</code> to send the video without leaving it.
 
 <b>Commands</b>
 /start — get your Instagram link code
@@ -121,6 +125,13 @@ Send it to @{account} in an Instagram DM.`,
   photoReadyCaption: `✅ Here's your photo.`,
   albumReadyCaption: `✅ Here's the whole post — {n} files.`,
 
+  // ---------- Platformalar, guruhlar, inline ----------
+  groupHello: `👋 Hi! Send Instagram, TikTok, YouTube Shorts or Pinterest links in this chat — I'll post the video right here.`,
+  groupNeedsAdmin: `ℹ️ Make me an admin so I can see links in this group — no special permissions needed.`,
+  inlineOpenBot: `📥 Download in the bot`,
+  errPlatformUnavailable: `⚙️ Downloading from this platform isn't available right now. Please try again later.`,
+  errVideoTooLong: `⏱ This video is too long — I download videos up to 10 minutes.`,
+
   mediaNotFound: `🤔 This file has no video or audio. Send a Reel, a video or a voice note.`,
   fileTooBig20: `📦 The file is larger than 20 MB — Telegram bots can't download files that big.
 
@@ -135,7 +146,7 @@ Send me the video directly — I'll name the song right away.`,
   unknownCommand: `Unknown command. See /help.`,
   textMenu: `Send me one of these 👇
 
-🔗 <b>Instagram link</b> — a Reel or video post link
+🔗 <b>Link</b> — Instagram, TikTok, YouTube Shorts or Pinterest
 🎬 <b>Video or audio</b> — right here (up to 20 MB)
 
 📸 Or share a Reel to <b>@{account}</b> on Instagram.

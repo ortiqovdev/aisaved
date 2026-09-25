@@ -3,11 +3,13 @@ import { sequentialize } from '@grammyjs/runner';
 import type { Message } from 'grammy/types';
 import { getTrack } from '../services/deezer.ts';
 import { downloadMedia, safeUnlink } from '../services/media.ts';
+import { isResolverConfigured } from '../services/ig-resolver.ts';
 import {
-  isResolverConfigured,
-  parseInstagramLink,
-  type ParsedLink,
-} from '../services/ig-resolver.ts';
+  LINK_MEDIA_TYPES,
+  linkFromStartPayload,
+  parseMediaLink,
+  type MediaLink,
+} from '../services/links.ts';
 import { PREVIEW_PREFIX } from './results.ts';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
@@ -15,7 +17,7 @@ import { errMessage } from '../lib/errors.ts';
 import * as usersRepo from '../db/users.repo.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
 import type { RequestStatus } from '../db/types.ts';
-import { IG_LINK_SOURCE, TELEGRAM_MAX_DOWNLOAD_BYTES, TELEGRAM_SOURCE } from '../lib/constants.ts';
+import { TELEGRAM_MAX_DOWNLOAD_BYTES, TELEGRAM_SOURCE } from '../lib/constants.ts';
 import {
   DEFAULT_LANG,
   LANGS,
@@ -44,8 +46,9 @@ import {
   SONG_ACTION,
   handleFindSongButton,
   handleRoundButton,
-  handleShareInlineQuery,
 } from './video-actions.ts';
+import { handleInlineQuery } from './inline.ts';
+import { getBotInfo } from './info.ts';
 import {
   IG_PROFILE_URL,
   alreadyLinked,
@@ -96,6 +99,19 @@ const igKeyboard = (ctx: BotContext): InlineKeyboard =>
 bot.command('start', async (ctx) => {
   const from = ctx.from;
   if (!from) return;
+
+  // Guruhda /start — faqat qisqa tanishtiruv (bog'lash kodi shaxsiy narsa)
+  if (ctx.chat.type !== 'private') {
+    await ctx.reply(ctx.t('groupHello'));
+    return;
+  }
+
+  // Inline rejimdan "📥 Botda yuklab olish": /start dl_<kalit>
+  const fromInline = linkFromStartPayload(ctx.match);
+  if (fromInline) {
+    await handleMediaLink(ctx, fromInline);
+    return;
+  }
 
   const user = await usersRepo.getOrCreateByTelegramId({
     telegramId: from.id,
@@ -195,7 +211,7 @@ bot.command('round', handleRound);
 // Yuklab olingan video tagidagi tugmalar va inline ulashish ([video-actions.ts])
 bot.callbackQuery(SONG_ACTION, handleFindSongButton);
 bot.callbackQuery(ROUND_ACTION, handleRoundButton);
-bot.on('inline_query', handleShareInlineQuery);
+bot.on('inline_query', handleInlineQuery);
 
 bot.command('help', async (ctx) => {
   await ctx.reply(helpText(ctx.lang), { parse_mode: 'HTML' });
@@ -281,6 +297,8 @@ bot.on(
   async (ctx) => {
     const from = ctx.from;
     if (!from) return;
+    // Guruhda har bir videoning qo'shig'ini aniqlab yurmaymiz — faqat havolalar
+    if (ctx.chat.type !== 'private') return;
 
     const media = extractTelegramMedia(ctx.message);
     if (!media) {
@@ -356,68 +374,68 @@ async function queueWithCard(
 
 /**
  * "⏳ Qabul qilindi" kartasi — natija keyin shu xabarning o'rniga chiqadi.
- * Faqat shaxsiy chatda: natijalar foydalanuvchining shaxsiy chatiga boradi,
- * guruhda karta boshqa chatda qolib ketardi — u yerda oddiy matn.
+ * Guruhda ham: karta havola tashlangan xabarga javob bo'lib chiqadi va
+ * natija (worker `targetChatOf` orqali) o'sha guruhga boradi.
  */
 async function openStatusCard(ctx: BotContext, key: MsgKey): Promise<number | null> {
   if (!ctx.chat || !ctx.message) return null;
-  if (ctx.chat.type !== 'private') {
-    await ctx.reply(ctx.t(key));
-    return null;
-  }
   return sendStatusCard(ctx.chat.id, ctx.lang, key, ctx.message.message_id);
 }
 
-// Rasm — qayta ishlay olmaymiz
+// Rasm — qayta ishlay olmaymiz (guruhda jim)
 bot.on('message:photo', async (ctx) => {
+  if (ctx.chat.type !== 'private') return;
   await ctx.reply(ctx.t('photoNotSupported'));
 });
 
 /**
- * Instagram HAVOLASI yuborilgan holat.
+ * Havola yuborilgan holat — Instagram, TikTok, YouTube Shorts, Pinterest.
  *
- * Meta rasmiy API orqali begona reels'ning faylini bermaydi, shuning uchun
- * havoladan videoni tashqi resolver topadi ([services/ig-resolver.ts]).
- * Undan keyin oqim media bilan bir xil: yuklash → audio parcha → AudD → Deezer.
+ * Fayl havoladan resolver orqali topiladi ([services/resolvers.ts]), keyin
+ * video tagida "🎵 · ⭕ · 📤" tugmalari bilan yuboriladi. Shaxsiy chatda ham,
+ * guruhda ham bir xil — natija havola tashlangan chatga keladi.
  */
-async function handleInstagramLink(ctx: BotContext, link: ParsedLink): Promise<void> {
+async function handleMediaLink(ctx: BotContext, link: MediaLink): Promise<void> {
   const from = ctx.from;
   const chat = ctx.chat;
   const message = ctx.message;
   if (!from || !chat || !message) return;
 
-  // Resolver ulanmagan bo'lsa navbatni behuda band qilmaymiz — darhol aytamiz
-  if (!isResolverConfigured()) {
-    await ctx.reply(ctx.t('linkDisabled'));
+  // Instagram resolver ulanmagan bo'lsa navbatni behuda band qilmaymiz
+  if (link.platform === 'instagram' && !isResolverConfigured()) {
+    if (chat.type === 'private') await ctx.reply(ctx.t('linkDisabled'));
     return;
   }
 
   // Eng tez yo'l: bu post yaqinda yuborilgan — xotiradagi keshdan, navbat va
   // kartasiz, bazaga ham bormasdan bir zumda. Ishlamasa odatdagi yo'l.
-  const cached = peekMediaCache(link.shortcode);
+  const cached = peekMediaCache(link.key);
   if (cached) {
     try {
       const items: OutMedia[] = cached.map((c) => ({ kind: c.kind, source: { fileId: c.fileId } }));
-      await deliverMedia(chat.id, items, ctx.lang, null);
-      logger.info({ telegramId: from.id, shortcode: link.shortcode }, 'Post xotiradagi keshdan yuborildi');
+      await deliverMedia(chat.id, items, ctx.lang, null, {
+        replyTo: message.message_id,
+        music: cached[0]?.music,
+      });
+      logger.info({ telegramId: from.id, key: link.key }, 'Post xotiradagi keshdan yuborildi');
       return;
     } catch (e) {
-      logger.warn({ shortcode: link.shortcode, err: errMessage(e) }, 'Keshdagi file_id ishlamadi');
-      await dropMediaCache(link.shortcode);
+      logger.warn({ key: link.key, err: errMessage(e) }, 'Keshdagi file_id ishlamadi');
+      await dropMediaCache(link.key);
     }
   }
 
   const requestId = await queueWithCard(ctx, 'linkQueued', {
     igMessageId: `tg:${chat.id}:${message.message_id}`,
     mediaUrl: link.url,
-    mediaType: IG_LINK_SOURCE,
-    // Shortcode doimiy — media keshi va musiqa keshining kaliti
-    fileUniqueId: `ig:${link.shortcode}`,
+    mediaType: LINK_MEDIA_TYPES[link.platform],
+    // Doimiy kalit (ig:/tt:/yt:/pin:) — media keshi va musiqa keshi shu bo'yicha
+    fileUniqueId: link.key,
   });
   if (requestId) {
     logger.info(
-      { requestId, telegramId: from.id, shortcode: link.shortcode, kind: link.kind },
-      'Instagram havolasi navbatga qo\'shildi',
+      { requestId, telegramId: from.id, platform: link.platform, key: link.key, group: chat.type !== 'private' },
+      'Havola navbatga qo\'shildi',
     );
   }
 }
@@ -425,16 +443,20 @@ async function handleInstagramLink(ctx: BotContext, link: ParsedLink): Promise<v
 // Boshqa har qanday matn
 bot.on('message:text', async (ctx) => {
   const text = ctx.message.text;
+  const isPrivate = ctx.chat.type === 'private';
 
-  if (text.startsWith('/')) {
-    await ctx.reply(ctx.t('unknownCommand'));
+  // Matn ichida qo'llab-quvvatlanadigan havola bo'lsa — asosiy oqim
+  const link = parseMediaLink(text);
+  if (link) {
+    await handleMediaLink(ctx, link);
     return;
   }
 
-  // Matn ichida Instagram havolasi bo'lsa — asosiy oqim
-  const link = parseInstagramLink(text);
-  if (link) {
-    await handleInstagramLink(ctx, link);
+  // Guruhda faqat havolalarga javob beramiz — suhbatga aralashmaymiz
+  if (!isPrivate) return;
+
+  if (text.startsWith('/')) {
+    await ctx.reply(ctx.t('unknownCommand'));
     return;
   }
 
@@ -443,6 +465,29 @@ bot.on('message:text', async (ctx) => {
     link_preview_options: { is_disabled: true },
     reply_markup: igKeyboard(ctx),
   });
+});
+
+/**
+ * Bot guruhga qo'shilganda — bitta qisqa tanishtiruv. Privacy mode yoqiq
+ * bo'lsa (bot faqat buyruqlarni ko'radi), havolalarni ko'rishi uchun admin
+ * qilish kerakligini ham aytamiz.
+ */
+bot.on('my_chat_member', async (ctx) => {
+  const { chat, old_chat_member: before, new_chat_member: after } = ctx.myChatMember;
+  if (chat.type !== 'group' && chat.type !== 'supergroup') return;
+
+  const wasOut = before.status === 'left' || before.status === 'kicked';
+  const isIn = after.status === 'member' || after.status === 'administrator';
+  if (!wasOut || !isIn) return;
+
+  const lines = [ctx.t('groupHello')];
+  if (after.status !== 'administrator' && !getBotInfo().readsGroupMessages) {
+    lines.push('', ctx.t('groupNeedsAdmin'));
+  }
+  await ctx.api.sendMessage(chat.id, lines.join('\n')).catch((e: unknown) =>
+    logger.debug({ chatId: chat.id, err: errMessage(e) }, 'Guruhga salom yuborilmadi'),
+  );
+  logger.info({ chatId: chat.id, title: chat.title }, 'Bot guruhga qo\'shildi');
 });
 
 // ---------------------------------------------------------------------------

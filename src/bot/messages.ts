@@ -1,5 +1,6 @@
 import { env } from '../config/env.ts';
 import { t, type Lang, type MsgKey } from '../i18n/index.ts';
+import { getBotInfo } from './info.ts';
 
 /**
  * Matnlarning o'zi `src/i18n/locales/*` da. Bu yerda — bir nechta joyda
@@ -33,7 +34,8 @@ export function alreadyLinked(lang: Lang, igScopedId: string | null): string {
   return igScopedId ? `${text}\n\n<i>IGSID: <code>${escapeHtml(igScopedId)}</code></i>` : text;
 }
 
-export const helpText = (lang: Lang): string => t(lang, 'help', { account: account() });
+export const helpText = (lang: Lang): string =>
+  t(lang, 'help', { account: account(), bot: escapeHtml(getBotInfo().username) });
 
 /** Attachment turiga qarab aniqroq javob (Instagram va Telegram uchun). */
 export function unsupportedReplyKey(attachmentType: string | null): MsgKey {

@@ -11,14 +11,16 @@ FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-# ffmpeg — videodan audio parcha ajratish uchun (musiqa aniqlash tezlashadi)
-RUN apk add --no-cache ffmpeg
+# ffmpeg — videodan audio parcha ajratish, dumaloq video, YouTube video+ovozni birlashtirish.
+# yt-dlp — YouTube Shorts (python3 kerak). YouTube tez-tez o'zgaradi, shuning uchun
+# distributiv paketi emas, rasmiy relizning oxirgi versiyasi olinadi.
+RUN apk add --no-cache ffmpeg python3 \
+ && wget -qO /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+ && chmod a+rx /usr/local/bin/yt-dlp
 
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
-# "Qabul qilindi" kartasi rasmi (src/bot/status-card.ts)
-COPY assets ./assets
 
 # root emas
 USER node

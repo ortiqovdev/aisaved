@@ -30,6 +30,8 @@ export interface ResolvedItem {
    * orqali berib bo'lmaydi, yuklab olib `content-type` bo'yicha aniqlanadi.
    */
   kind: MediaKind | null;
+  /** Kichik muqova rasmi (inline natijalar uchun), bo'lsa. */
+  thumb?: string | null;
 }
 
 /** Havoladan ajratilgan media. */
@@ -260,7 +262,7 @@ function extractMediaItems(root: unknown): ResolvedItem[] {
           const url = itemUrl(x)!;
           if (seen.has(url)) continue;
           seen.add(url);
-          items.push({ url, kind: kindOfType(itemType(x)!) });
+          items.push({ url, kind: kindOfType(itemType(x)!), thumb: itemThumb(x) });
         }
         return items.slice(0, MAX_POST_ITEMS);
       }
@@ -278,6 +280,14 @@ function extractMediaItems(root: unknown): ResolvedItem[] {
   // 3) Eski yo'l — bitta video
   const video = extractVideoUrl(root);
   return video ? [{ url: video, kind: 'video' }] : [];
+}
+
+function itemThumb(item: Record<string, unknown>): string | null {
+  for (const key of ['thumb', 'thumbnail', 'thumbnail_url', 'cover', 'preview']) {
+    const v = item[key];
+    if (typeof v === 'string' && /^https?:\/\//i.test(v)) return v;
+  }
+  return null;
 }
 
 /** `image/jpeg`, `photo`, `GraphVideo`, `mp4` ... → tur. */

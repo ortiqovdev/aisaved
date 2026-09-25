@@ -11,15 +11,14 @@ import type { MediaKind } from '../services/ig-resolver.ts';
 import { isImageContentType, type DownloadedFile } from '../services/media.ts';
 import type { CachedMedia } from '../db/media-cache.repo.ts';
 import { t, type Lang } from '../i18n/index.ts';
+import { finishStatusCard, setStatusCardText } from './status-card.ts';
 
 /**
  * Natijani foydalanuvchiga yetkazish.
  *
- * `statusId` — "⏳ Qabul qilindi" kartasi ([status-card.ts]). Bor bo'lsa,
- * natija yangi xabar emas, AYNAN SHU xabarning o'zi bo'lib chiqadi: karta
- * videoga / rasmga / qo'shiq natijasiga aylantiriladi. Aylantirib bo'lmasa
- * (foydalanuvchi kartani o'chirgan va h.k.) — natija yangi xabar bo'lib
- * ketadi, karta esa o'chiriladi. Ikkala holatda ham chatda bitta xabar qoladi.
+ * `statusId` — "⏳ Qabul qilindi" loading xabari ([status-card.ts]). Natija
+ * havola xabariga javob bo'lib yuborilgach loading o'chiriladi; xato bo'lsa
+ * loading matni xatoga almashadi. Chatda ortiqcha xabar qolmaydi.
  */
 
 /**
@@ -36,6 +35,20 @@ export interface OutMedia {
   source: MediaSource;
 }
 
+export interface DeliverOptions {
+  /** Yangi xabar bo'lsa — qaysi xabarga javob (guruhda: havola tashlangan xabar). */
+  replyTo?: number | undefined;
+  /** Videodagi qo'shiq ("Nom — Ijrochi"), manba bersa — caption oxiriga. */
+  music?: string | null | undefined;
+}
+
+const replyParams = (replyTo: number | undefined) =>
+  replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {};
+
+const withMusic = (caption: string, music: string | null | undefined): string =>
+  music ? `${caption}
+♬ ${music}` : caption;
+
 /** Har chaqiruvda yangi InputFile — fayl oqimi bir marta o'qiladi. */
 function inputOf(source: MediaSource): string | InputFile {
   if ('path' in source) return new InputFile(source.path);
@@ -50,9 +63,11 @@ export const fromDownloaded = (files: DownloadedFile[]): OutMedia[] =>
 
 /** Yuborilgan xabardagi fayl — media keshi uchun. */
 function cachedOf(message: Message): CachedMedia | null {
-  if (message.video) return { kind: 'video', fileId: message.video.file_id };
+  if (message.video) {
+    return { kind: 'video', fileId: message.video.file_id, fileUniqueId: message.video.file_unique_id };
+  }
   const photo = message.photo?.at(-1);
-  return photo ? { kind: 'photo', fileId: photo.file_id } : null;
+  return photo ? { kind: 'photo', fileId: photo.file_id, fileUniqueId: photo.file_unique_id } : null;
 }
 
 /** Telegram albomida ko'pi bilan 10 ta fayl. */
@@ -65,39 +80,25 @@ async function placeMedia(
   item: OutMedia,
   caption: string,
   keyboard: InlineKeyboardMarkup,
+  replyTo?: number,
 ): Promise<Message> {
-  if (statusId) {
-    const media =
-      item.kind === 'video'
-        ? InputMediaBuilder.video(inputOf(item.source), { caption, supports_streaming: true })
-        : InputMediaBuilder.photo(inputOf(item.source), { caption });
-    try {
-      const edited = await bot.api.editMessageMedia(chatId, statusId, media, {
-        reply_markup: keyboard,
-      });
-      if (edited !== true) return edited;
-    } catch (e) {
-      // URL'ni Telegram ololmagan bo'lsa, yangi xabar ham ketmaydi — xato
-      // yuqoriga chiqadi va chaqiruvchi faylni yuklab olib qayta urinadi.
-      if ('url' in item.source) throw e;
-      logger.debug({ chatId, statusId, err: errMessage(e) }, 'Kartani aylantirib bo\'lmadi — yangi xabar');
-    }
-  }
-
+  // Xato bo'lsa (masalan Telegram URL'ni ololmadi) loading xabari joyida
+  // qoladi — chaqiruvchi faylni yuklab olib qayta urinadi.
   const sent =
     item.kind === 'video'
       ? await bot.api.sendVideo(chatId, inputOf(item.source), {
           caption,
           supports_streaming: true,
           reply_markup: keyboard,
+          ...replyParams(replyTo),
         })
-      : await bot.api.sendPhoto(chatId, inputOf(item.source), { caption, reply_markup: keyboard });
-  await deleteQuietly(chatId, statusId);
+      : await bot.api.sendPhoto(chatId, inputOf(item.source), {
+          caption,
+          reply_markup: keyboard,
+          ...replyParams(replyTo),
+        });
+  await finishStatusCard(chatId, statusId);
   return sent;
-}
-
-async function deleteQuietly(chatId: number, messageId: number | null): Promise<void> {
-  if (messageId) await bot.api.deleteMessage(chatId, messageId).catch(() => undefined);
 }
 
 /**
@@ -113,10 +114,11 @@ export async function deliverMedia(
   items: OutMedia[],
   lang: Lang,
   statusId: number | null,
+  options: DeliverOptions = {},
 ): Promise<CachedMedia[]> {
   const [single] = items;
   if (items.length === 1 && single) {
-    const sent = await deliverSingle(chatId, single, lang, statusId);
+    const sent = await deliverSingle(chatId, single, lang, statusId, options);
     return sent ? [sent] : [];
   }
 
@@ -124,18 +126,20 @@ export async function deliverMedia(
   for (let i = 0; i < items.length; i += ALBUM_LIMIT) {
     const chunk = items.slice(i, i + ALBUM_LIMIT).map((item, j) => {
       const caption =
-        i === 0 && j === 0 ? { caption: t(lang, 'albumReadyCaption', { n: items.length }) } : {};
+        i === 0 && j === 0
+          ? { caption: withMusic(t(lang, 'albumReadyCaption', { n: items.length }), options.music) }
+          : {};
       return item.kind === 'video'
         ? InputMediaBuilder.video(inputOf(item.source), { supports_streaming: true, ...caption })
         : InputMediaBuilder.photo(inputOf(item.source), caption);
     });
-    const messages = await bot.api.sendMediaGroup(chatId, chunk);
+    const messages = await bot.api.sendMediaGroup(chatId, chunk, replyParams(options.replyTo));
     for (const m of messages) {
       const c = cachedOf(m);
       if (c) delivered.push(c);
     }
   }
-  await deleteQuietly(chatId, statusId);
+  await finishStatusCard(chatId, statusId);
   logger.info({ chatId, files: items.length }, 'Albom Telegram\'ga yuborildi');
   return delivered;
 }
@@ -145,14 +149,25 @@ async function deliverSingle(
   item: OutMedia,
   lang: Lang,
   statusId: number | null,
+  options: DeliverOptions,
 ): Promise<CachedMedia | null> {
-  const caption = t(lang, item.kind === 'video' ? 'videoReadyCaption' : 'photoReadyCaption');
+  const caption = withMusic(
+    t(lang, item.kind === 'video' ? 'videoReadyCaption' : 'photoReadyCaption'),
+    options.music,
+  );
   const keyboardFor = (fileId: string | null) =>
     item.kind === 'video' ? videoActionsKeyboard(lang, fileId) : photoActionsKeyboard(lang, fileId);
 
   // Keshdan kelgan bo'lsa file_id oldindan ma'lum — "📤" darhol to'liq
   const knownId = 'fileId' in item.source ? item.source.fileId : null;
-  const message = await placeMedia(chatId, statusId, item, caption, keyboardFor(knownId));
+  const message = await placeMedia(
+    chatId,
+    statusId,
+    item,
+    caption,
+    keyboardFor(knownId),
+    options.replyTo,
+  );
   const sent = cachedOf(message);
 
   // Inline ulashish uchun faylning file_id si kerak — yangi fayl bo'lsa u
@@ -180,49 +195,17 @@ export async function deliverSong(
   statusId: number | null,
   replyTo?: number,
 ): Promise<void> {
-  if (statusId) {
-    const message = await buildSongMessage(song, lang);
-    const markup = message.keyboard ? { reply_markup: message.keyboard } : {};
-    try {
-      if (message.coverUrl) {
-        await bot.api.editMessageMedia(
-          chatId,
-          statusId,
-          InputMediaBuilder.photo(message.coverUrl, { caption: message.text, parse_mode: 'HTML' }),
-          markup,
-        );
-      } else {
-        await bot.api.editMessageCaption(chatId, statusId, {
-          caption: message.text,
-          parse_mode: 'HTML',
-          ...markup,
-        });
-      }
-      logger.info({ chatId, song: song?.title ?? null }, 'Musiqa natijasi (karta o\'rnida)');
-      return;
-    } catch (e) {
-      logger.debug({ chatId, err: errMessage(e) }, 'Kartani natijaga aylantirib bo\'lmadi — yangi xabar');
-    }
-  }
-
   await sendSongOnly(chatId, song, lang, replyTo);
-  await deleteQuietly(chatId, statusId);
+  await finishStatusCard(chatId, statusId);
 }
 
-/** Xato: karta matni xatoga almashtiriladi (karta bo'lmasa — oddiy xabar). */
+/** Xato: loading matni xatoga almashtiriladi (bo'lmasa — oddiy xabar). */
 export async function showFailure(
   chatId: number,
   text: string,
   statusId: number | null,
 ): Promise<void> {
-  if (statusId) {
-    try {
-      await bot.api.editMessageCaption(chatId, statusId, { caption: text, parse_mode: 'HTML' });
-      return;
-    } catch (e) {
-      logger.debug({ chatId, err: errMessage(e) }, 'Karta matnini o\'zgartirib bo\'lmadi');
-    }
-  }
+  if (statusId && (await setStatusCardText(chatId, statusId, text))) return;
   await trySendText(chatId, text);
 }
 

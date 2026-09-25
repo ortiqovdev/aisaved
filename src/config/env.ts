@@ -68,8 +68,31 @@ const envSchema = z.object({
   IG_RESOLVER_TITLE_PATH: z.string().default(''),
   IG_RESOLVER_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(120_000).default(45_000),
 
-  // AudD.io
-  AUDD_API_TOKEN: z.string().min(1),
+  // Boshqa platformalar (src/services/resolvers.ts)
+  /**
+   * TikTok: tikwm-mos API (`{url}` — havola). Bo'sh qoldirilsa TikTok o'chiq.
+   * O'zbekistonda TikTok CDN'i yopiq: video Telegram'ga URL orqali beriladi
+   * (Telegram uni o'zi oladi), yuklab olish zaxirasi faqat chet eldagi serverda ishlaydi.
+   */
+  TIKTOK_RESOLVER_URL: z.string().default('https://www.tikwm.com/api/?url={url}&hd=1'),
+  /** Pinterest ochiq widget API'si orqali ishlaydi — kalit kerak emas. */
+  PINTEREST_ENABLED: boolish(true),
+  /** YouTube Shorts: yt-dlp (+ ffmpeg). Topilmasa YouTube havolalari xato beradi. */
+  YTDLP_PATH: z.string().default('yt-dlp'),
+  /** Shundan uzun YouTube videolari yuklanmaydi (sekund). */
+  YOUTUBE_MAX_SECONDS: z.coerce.number().int().min(10).max(3600).default(600),
+
+  // Qo'shiq aniqlash: Shazam (bepul, asosiy) → AudD (pullik zaxira)
+  /** Norasmiy Shazam (amp.shazam.com). Bepul; bitta IP'dan juda ko'p so'rov bo'lsa bloklaydi. */
+  SHAZAM_ENABLED: boolish(true),
+  /**
+   * AudD.io — pullik zaxira ($5 / 1000 so'rov). Sukut bo'yicha O'CHIQ:
+   * Shazam topmasa yoki ishlamasa, faqat shu yoqilgan bo'lsa chaqiriladi.
+   */
+  AUDD_ENABLED: boolish(false),
+  AUDD_API_TOKEN: z.string().default(''),
+  /** AudD'ga kunlik so'rovlar chegarasi — xarajat oldindan ma'lum bo'lsin (0 = cheksiz). */
+  AUDD_DAILY_LIMIT: z.coerce.number().int().min(0).default(100),
 
   // Supabase
   SUPABASE_URL: z.string().url(),

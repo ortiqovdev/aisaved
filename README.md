@@ -119,6 +119,8 @@ Manba kodida importlar `.ts` kengaytmasi bilan yozilgan (`allowImportingTsExtens
    "⏳ Qabul qilindi" kartasi natijaga aylanishi server qayta ishga tushganda ham ishlaydi.
    Va [`supabase/migrations/0005_speed.sql`](supabase/migrations/0005_speed.sql) — navbatga qo'yish
    bitta so'rovda va media keshi (bir marta yuborilgan reels keyingi safar RapidAPI'siz, bir zumda).
+   Va [`supabase/migrations/0006_song_cache.sql`](supabase/migrations/0006_song_cache.sql) — qo'shiq natijasi
+   keshi: bitta videoni ko'p odam so'rasa ham AudD (pullik) faqat bir marta chaqiriladi.
 4. **Project Settings → API** dan oling:
    - `Project URL` → `.env` dagi `SUPABASE_URL`
    - `service_role` **secret** kalit → `SUPABASE_SERVICE_ROLE_KEY`
@@ -294,6 +296,21 @@ Musiqa topilganda javob quyidagilardan iborat:
 | `/round` | Videoga **javob** qilib yozilsa — o'sha videodan dumaloq video xabar (video note) yasaydi: markazdan kvadrat, 640×640, ko'pi bilan 60 soniya. Bot yuborgan natija videosi uchun ham ishlaydi |
 | `/help` | Yordam |
 
+
+### Platformalar, guruhlar, inline
+
+| Qayerda | Nima qiladi |
+|---|---|
+| Shaxsiy chat | Instagram, TikTok, YouTube Shorts, Pinterest havolasi → video/rasm/karusel, tagida 🎵 ⭕ 📤 |
+| Guruh | Guruhga tashlangan havolaga javob qilib videoni o'sha guruhga qo'yadi. Boshqa xabarlarga aralashmaydi. Havolalarni ko'rishi uchun bot admin bo'lishi yoki @BotFather → `/setprivacy` → Disable kerak |
+| Istalgan chat | `@bot <havola>` — inline rejim (@BotFather → `/setinline`). Keshdagi post darhol, TikTok/Pinterest/Instagram havola orqali; YouTube uchun "📥 Botda yuklab olish" |
+
+Manbalar: TikTok — tikwm-mos API (qo'shiq nomini ham beradi), Pinterest — ochiq widget API, YouTube — yt-dlp + ffmpeg.
+
+**Qo'shiq aniqlash (🎵)** — eng arzonidan boshlab: kesh (0006) → platforma aytgan qo'shiq (TikTok) →
+**Shazam** (norasmiy, bepul; `SHAZAM_ENABLED`) → **AudD** (pullik zaxira, sukut bo'yicha o'chiq: `AUDD_ENABLED`,
+kunlik chegara `AUDD_DAILY_LIMIT`). Shazam ishlayotganini tekshirish: `npm run test:shazam`.
+
 ---
 
 ## Loyiha tuzilishi
@@ -334,6 +351,7 @@ supabase/migrations/0002_fixes.sql
 supabase/migrations/0003_user_language.sql
 supabase/migrations/0004_status_message.sql
 supabase/migrations/0005_speed.sql
+supabase/migrations/0006_song_cache.sql
 ```
 
 ---

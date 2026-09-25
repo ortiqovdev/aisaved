@@ -19,6 +19,8 @@
     "test:resolver": "node tests/ig-resolver.test.mjs",
     "test:i18n": "node tests/i18n.test.mjs",
     "test:round": "node tests/video-note.test.mjs",
+    "test:links": "node tests/links.test.mjs",
+    "test:shazam": "node tests/shazam.live.mjs",
     "bot:profile": "node src/scripts/sync-bot-profile.ts"
   },
   "dependencies": {
@@ -28,6 +30,7 @@
     "express": "^4.21.1",
     "grammy": "^1.30.0",
     "pino": "^9.5.0",
+    "shazam-api": "^0.3.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

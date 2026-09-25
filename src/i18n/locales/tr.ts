@@ -6,10 +6,10 @@ export const tr: Messages = {
   cmdUnlink: `Instagram bağlantısını kaldır`,
   cmdLanguage: `Dili değiştir`,
   cmdHelp: `Yardım`,
-  botShortDescription: `Instagram Reels'teki şarkıyı bulurum. Bağlantı ya da video gönder — adını, videoyu ve dinleme linklerini al.`,
+  botShortDescription: `Reels, TikTok, Shorts ve Pinterest videolarını indir, içindeki şarkıyı bul. Başlamak için bağlantı gönder.`,
   botDescription: `🎵 Bir Reels'te güzel bir şarkı mı duydun? Hangi şarkı olduğunu söyleyeyim.
 
-• Instagram Reels bağlantısı gönder — videoyu ve şarkıyı geri göndereyim
+• Instagram, TikTok, YouTube Shorts veya Pinterest bağlantısı gönder — videoyu geri göndereyim
 • Ya da herhangi bir video, sesli mesaj veya ses dosyası at (20 MB'a kadar)
 • Ya da Instagram'da Reels'i @{account} ile paylaş
 
@@ -44,7 +44,7 @@ Bağlantıyı kaldırmak için: /unlink`,
   help: `<b>Şarkı bulmanın üç yolu</b>
 
 <b>1️⃣ Bağlantı gönder — en kolayı</b>
-Instagram'da Reels'in altındaki <b>Paylaş → Bağlantıyı kopyala</b>'ya dokun ve buraya yapıştır.
+Instagram, TikTok, YouTube Shorts veya Pinterest'te <b>Paylaş → Bağlantıyı kopyala</b>'ya dokun ve buraya yapıştır — ya da doğrudan bu bota paylaş.
 Videoyu, fotoğrafı ya da tüm gönderiyi indiririm — istersen şarkısını da bulurum. Hesap bağlamak gerekmez.
 
 <b>2️⃣ Videoyu doğrudan gönder</b>
@@ -55,6 +55,10 @@ Video, GIF, sesli mesaj veya ses dosyası gönder — şarkı adıyla yanıt ver
 Instagram'da Reels'i @{account} hesabına gönder.
 Bunun için hesabını bir kez bağlaman gerekir: /start
 <i>Not: Instagram bazı Reels'lerin dosyasını vermiyor — bu durumda senden bağlantıyı isterim (1. yol).</i>
+
+<b>👥 Gruplarda ve her sohbette</b>
+Beni bir gruba ekleyin — orada paylaşılan bağlantıları indiririm.
+Herhangi bir sohbette <code>@{bot} bağlantı</code> yazın — videoyu sohbetten çıkmadan gönderin.
 
 <b>Komutlar</b>
 /start — Instagram bağlantı kodunu al
@@ -112,6 +116,13 @@ Instagram'da @{account} hesabına DM olarak gönder.`,
   photoReadyCaption: `✅ İşte fotoğrafın.`,
   albumReadyCaption: `✅ İşte gönderinin tamamı — {n} dosya.`,
 
+  // ---------- Platformalar, guruhlar, inline ----------
+  groupHello: `👋 Merhaba! Bu sohbete Instagram, TikTok, YouTube Shorts veya Pinterest bağlantısı gönderin — videoyu hemen burada paylaşırım.`,
+  groupNeedsAdmin: `ℹ️ Gruptaki bağlantıları görebilmem için beni yönetici yapın — özel yetki gerekmez.`,
+  inlineOpenBot: `📥 Botta indir`,
+  errPlatformUnavailable: `⚙️ Bu platformdan indirme şu anda kullanılamıyor. Lütfen daha sonra tekrar dene.`,
+  errVideoTooLong: `⏱ Bu video çok uzun — 10 dakikaya kadar olan videoları indiriyorum.`,
+
   mediaNotFound: `🤔 Bu dosyada video veya ses yok. Reels, video ya da sesli mesaj gönder.`,
   fileTooBig20: `📦 Dosya 20 MB'tan büyük — Telegram botları bu boyuttaki dosyaları indiremez.
 
@@ -126,7 +137,7 @@ Videoyu bana doğrudan gönder — şarkının adını hemen söylerim.`,
   unknownCommand: `Böyle bir komut yok. /help'e bak.`,
   textMenu: `Bana şunlardan birini gönder 👇
 
-🔗 <b>Instagram bağlantısı</b> — Reels veya video gönderi bağlantısı
+🔗 <b>Bağlantı</b> — Instagram, TikTok, YouTube Shorts veya Pinterest
 🎬 <b>Video veya ses</b> — doğrudan buraya (20 MB'a kadar)
 
 📸 Ya da Instagram'da Reels'i <b>@{account}</b> hesabına gönder.

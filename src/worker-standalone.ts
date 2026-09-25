@@ -24,7 +24,11 @@ async function main(): Promise<void> {
   await assertDbReady();
   // Natija videosi tagidagi "Ulashish" tugmasi bot username'iga tayanadi
   const me = await bot.api.getMe();
-  setBotInfo({ username: me.username, supportsInline: me.supports_inline_queries });
+  setBotInfo({
+    username: me.username,
+    supportsInline: me.supports_inline_queries,
+    readsGroupMessages: me.can_read_all_group_messages,
+  });
   await ensureTmpDir();
   await cleanupTmpDir();
   startTmpCleanup();

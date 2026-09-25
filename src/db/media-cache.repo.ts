@@ -15,11 +15,16 @@ import type { MediaKind } from '../services/ig-resolver.ts';
 export interface CachedMedia {
   kind: MediaKind;
   fileId: string;
+  /** Postdagi qo'shiq (TikTok) — faqat birinchi elementda saqlanadi. */
+  music?: string | null;
+  /** Telegram file_unique_id — qo'shiq keshi kaliti (saqlanmaydi, faqat yuborilganda). */
+  fileUniqueId?: string;
 }
 
 interface StoredItem {
   kind: MediaKind;
   file_id: string;
+  music?: string | null;
 }
 
 /** Xotirada saqlanadigan postlar soni (eng eskisi chiqarib yuboriladi). */
@@ -68,7 +73,7 @@ export async function getMediaCache(shortcode: string): Promise<CachedMedia[] | 
   }
   if (!data?.items?.length) return null;
 
-  const items = data.items.map((i) => ({ kind: i.kind, fileId: i.file_id }));
+  const items = data.items.map((i) => ({ kind: i.kind, fileId: i.file_id, music: i.music ?? null }));
   rememberInMemory(shortcode, items);
   return items;
 }
@@ -78,7 +83,11 @@ export async function putMediaCache(shortcode: string, items: CachedMedia[]): Pr
   rememberInMemory(shortcode, items);
   if (tableMissing) return;
 
-  const stored: StoredItem[] = items.map((i) => ({ kind: i.kind, file_id: i.fileId }));
+  const stored: StoredItem[] = items.map((i) => ({
+    kind: i.kind,
+    file_id: i.fileId,
+    ...(i.music ? { music: i.music } : {}),
+  }));
   const { error } = await supabase
     .from('media_cache')
     .upsert({ shortcode, items: stored }, { onConflict: 'shortcode' });

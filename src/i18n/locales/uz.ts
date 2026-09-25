@@ -6,10 +6,10 @@ export const uz: Messages = {
   cmdUnlink: `Bog'lanishni bekor qilish`,
   cmdLanguage: `Tilni o'zgartirish`,
   cmdHelp: `Yordam`,
-  botShortDescription: `Instagram Reels'dagi qo'shiqni topaman. Havola yoki video yuboring — nomi, video va tinglash havolalari.`,
+  botShortDescription: `Reels, TikTok, Shorts va Pinterest videolarini yuklab oling va qo'shig'ini toping. Havola yuboring.`,
   botDescription: `🎵 Reels'da yoqqan qo'shiqni eshitdingizmi? Nomini aytib beraman.
 
-• Instagram Reels havolasini yuboring — video va qo'shiqni qaytaraman
+• Instagram, TikTok, YouTube Shorts yoki Pinterest havolasini yuboring — videoni qaytaraman
 • Yoki istalgan video, ovozli xabar yoki audio tashlang (20 MB gacha)
 • Yoki Instagram'da @{account} ga Reels ulashing
 
@@ -44,7 +44,7 @@ Bog'lanishni bekor qilish: /unlink`,
   help: `<b>Musiqani topishning uch yo'li bor</b>
 
 <b>1️⃣ Havola yuboring — eng qulayi</b>
-Instagram'da reels ostidagi <b>Share → Copy link</b> ni bosing va havolani shu yerga tashlang.
+Instagram, TikTok, YouTube Shorts yoki Pinterest'da <b>Share → Copy link</b> ni bosing va havolani shu yerga tashlang — yoki to'g'ridan-to'g'ri shu botga ulashing.
 Video, rasm yoki butun postni yuklab beraman, xohlasangiz qo'shig'ini ham topaman. Bog'lanish shart emas.
 
 <b>2️⃣ Videoni to'g'ridan-to'g'ri tashlang</b>
@@ -55,6 +55,10 @@ Video, GIF, ovozli xabar yoki audio yuboring — musiqa nomini javob qilaman.
 Instagram'da @{account} ga reels'ni "Yuborish" qilasiz.
 Buning uchun bir marta bog'lanish kerak: /start
 <i>Eslatma: Instagram ba'zi reels'larning faylini bermaydi — bunday holatda sizdan havolani so'rayman (1-yo'l).</i>
+
+<b>👥 Guruhlarda va istalgan chatda</b>
+Meni guruhga qo'shing — u yerga tashlangan havolalarni yuklab beraman.
+Istalgan chatda <code>@{bot} havola</code> deb yozing — videoni chatdan chiqmasdan yuborasiz.
 
 <b>Buyruqlar</b>
 /start — Instagram bilan bog'lanish kodini olish
@@ -112,6 +116,13 @@ Uni Instagram'da @{account} ga DM qiling.`,
   photoReadyCaption: `✅ Mana rasmingiz.`,
   albumReadyCaption: `✅ Mana butun post — {n} ta fayl.`,
 
+  // ---------- Platformalar, guruhlar, inline ----------
+  groupHello: `👋 Salom! Shu chatga Instagram, TikTok, YouTube Shorts yoki Pinterest havolasini tashlang — videoni shu yerning o'ziga yuklab beraman.`,
+  groupNeedsAdmin: `ℹ️ Guruhdagi havolalarni ko'rishim uchun meni admin qiling — alohida huquqlar shart emas.`,
+  inlineOpenBot: `📥 Botda yuklab olish`,
+  errPlatformUnavailable: `⚙️ Bu platformadan yuklab olish hozircha ishlamayapti. Birozdan so'ng qayta urinib ko'ring.`,
+  errVideoTooLong: `⏱ Bu video juda uzun — 10 daqiqagacha bo'lgan videolarni yuklab beraman.`,
+
   mediaNotFound: `🤔 Bu faylda video yoki audio yo'q. Reels, video yoki ovozli xabar yuboring.`,
   fileTooBig20: `📦 Fayl 20MB dan katta — Telegram botlari bunday faylni yuklab ola olmaydi.
 
@@ -126,7 +137,7 @@ Videoni menga to'g'ridan-to'g'ri tashlang — musiqasini darhol aytaman.`,
   unknownCommand: `Bunday buyruq yo'q. /help ni ko'ring.`,
   textMenu: `Menga quyidagilardan birini yuboring 👇
 
-🔗 <b>Instagram havolasi</b> — reels yoki video post havolasini tashlang
+🔗 <b>Havola</b> — Instagram, TikTok, YouTube Shorts yoki Pinterest
 🎬 <b>Video yoki audio</b> — to'g'ridan-to'g'ri shu yerga (20MB gacha)
 
 📸 Yoki Instagram'da <b>@{account}</b> ga reels yuboring.

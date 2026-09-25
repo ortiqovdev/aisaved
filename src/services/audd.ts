@@ -43,6 +43,31 @@ function appleArtwork(template: string | undefined): string | null {
   return template.replace('{w}', '500').replace('{h}', '500');
 }
 
+// ---------------------------------------------------------------------------
+// AudD — pullik ZAXIRA: faqat AUDD_ENABLED=true bo'lsa va kunlik chegara
+// (AUDD_DAILY_LIMIT) tugamagan bo'lsa chaqiriladi. Hisob jarayon xotirasida
+// (UTC kuni bo'yicha) — xarajat oldindan ma'lum bo'lsin.
+// ---------------------------------------------------------------------------
+
+let budgetDay = '';
+let usedToday = 0;
+
+function rollDay(): void {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== budgetDay) {
+    budgetDay = today;
+    usedToday = 0;
+  }
+}
+
+/** AudD'ni hozir chaqirish mumkinmi (yoqilgan, tokeni bor, kunlik chegara qolgan). */
+export function auddAvailable(): boolean {
+  if (env.MOCK_AUDD) return true;
+  if (!env.AUDD_ENABLED || env.AUDD_API_TOKEN.trim() === '') return false;
+  rollDay();
+  return env.AUDD_DAILY_LIMIT === 0 || usedToday < env.AUDD_DAILY_LIMIT;
+}
+
 /**
  * Faylni AudD.io ga yuborib musiqani aniqlaydi.
  * @returns topilgan qo'shiq, yoki null — agar musiqa aniqlanmasa
@@ -51,6 +76,12 @@ function appleArtwork(template: string | undefined): string | null {
 export async function identifySong(filePath: string): Promise<SongInfo | null> {
   if (env.MOCK_AUDD) return mockIdentify(filePath);
 
+  rollDay();
+  usedToday += 1;
+  if (env.AUDD_DAILY_LIMIT > 0 && usedToday === env.AUDD_DAILY_LIMIT) {
+    logger.warn({ limit: env.AUDD_DAILY_LIMIT }, 'AudD kunlik chegarasiga yetildi — ertagacha chaqirilmaydi');
+  }
+
   const buf = await fsp.readFile(filePath);
 
   const form = new FormData();
@@ -58,7 +89,9 @@ export async function identifySong(filePath: string): Promise<SongInfo | null> {
   form.append('return', 'apple_music,spotify,deezer');
   form.append('file', new Blob([buf]), path.basename(filePath));
 
-  const res = await fetchWithTimeout(AUDD_ENDPOINT, { method: 'POST', body: form }, 90_000);
+  // AudD odatda 1–1.5 s da javob beradi (o'lchangan: ~0.9 s). Osilib qolgan
+  // so'rov foydalanuvchini 90 s kuttirmasin — 15 s dan keyin qayta urinamiz.
+  const res = await fetchWithTimeout(AUDD_ENDPOINT, { method: 'POST', body: form }, 15_000);
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -79,11 +112,12 @@ export async function identifySong(filePath: string): Promise<SongInfo | null> {
     const code = json.error?.error_code;
     const message = json.error?.error_message ?? 'noma\'lum xato';
 
-    // 900 = token yaroqsiz yoki trial/obuna tugagan — retry qilish foydasiz.
-    // Yangilash: dashboard.audd.io
-    if (code === 900) {
+    // 900 = token yaroqsiz yoki trial/obuna tugagan; 902 = akkaunt limiti
+    // tugagan. Ikkalasida ham retry foydasiz — to'ldirish kerak: dashboard.audd.io
+    if (code === 900 || code === 902) {
       throw new PermanentError(
-        `AudD tokeni yaroqsiz yoki obuna tugagan (dashboard.audd.io): ${message}`,
+        `AudD ${code === 902 ? 'limiti tugagan' : 'tokeni yaroqsiz yoki obuna tugagan'} ` +
+          `(dashboard.audd.io): ${message}`,
         msg('songServiceDown'),
       );
     }
