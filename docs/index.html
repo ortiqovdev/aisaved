@@ -24,7 +24,7 @@
 
 <h1>Privacy Policy</h1>
 <p class="meta">AiSaved Bot (<code>@aisavedinstabot</code> on Instagram &middot; <code>@aisavedinstabot</code> on Telegram)<br>
-Last updated: 8 September 2026</p>
+Last updated: 26 September 2026</p>
 
 <h2>1. Who we are</h2>
 <p>AiSaved Bot (&ldquo;the Service&rdquo;, &ldquo;we&rdquo;) identifies the music used in a video and reports the result to you on Telegram.
@@ -67,9 +67,11 @@ archive, republish or share your media, and we do not build any library from it.
   <tr><th>Provider</th><th>What is shared</th><th>Purpose</th></tr>
   <tr><td>Meta / Instagram</td><td>Your IGSID and the reply text we send you</td><td>Receiving your reel and replying in the Instagram chat</td></tr>
   <tr><td>Telegram</td><td>Your Telegram user ID and the reply we send</td><td>Delivering results to you</td></tr>
-  <tr><td>AudD.io</td><td>A short audio snippet (a few seconds) of your media</td><td>Music recognition (audio fingerprinting)</td></tr>
+  <tr><td>Shazam (Apple)</td><td>A short audio snippet (a few seconds) of your media</td><td>Music recognition (audio fingerprinting)</td></tr>
+  <tr><td>AudD.io</td><td>A short audio snippet, only if Shazam could not recognize it</td><td>Backup music recognition</td></tr>
   <tr><td>Deezer</td><td>The song title and artist name only</td><td>Fetching the album cover, other versions and a 30-second official preview</td></tr>
   <tr><td>Supabase</td><td>The records listed in section 3</td><td>Database hosting</td></tr>
+  <tr><td>Render</td><td>Data processed by the bot while handling your request</td><td>Server hosting (EU, Frankfurt)</td></tr>
 </table>
 <p>We do not sell your data, we do not use it for advertising, and we do not share it with anyone else.</p>
 
@@ -80,7 +82,10 @@ platforms where it can be heard, plus the 30-second preview those platforms them
 <h2>6. How long we keep data</h2>
 <ul>
   <li><strong>Media files:</strong> deleted immediately after processing (in every case within 6 hours).</li>
-  <li><strong>Account link and request history:</strong> kept while your account is linked, so you can see your recent requests.</li>
+  <li><strong>Account link:</strong> kept while your account is linked.</li>
+  <li><strong>Request history:</strong> deleted automatically 30 days after each request is completed.</li>
+  <li><strong>Cached results</strong> (Telegram file identifiers of already delivered videos and recognized song titles, not linked to you):
+      deleted automatically after 180 days.</li>
   <li><strong>After you unlink or request deletion:</strong> removed as described below.</li>
 </ul>
 
@@ -127,6 +132,10 @@ reels&rsquo;ni Instagram orqali yuborish.</p>
 (IGSID); bir martalik bog&rsquo;lash kodi; yuborgan faylingizga havola; aniqlangan qo&rsquo;shiq nomi va ijrochisi;
 so&rsquo;rov holati.</p>
 
+<p><strong>Saqlash muddati:</strong> so&rsquo;rovlar tarixi har bir so&rsquo;rov tugaganidan 30 kun o&rsquo;tib avtomatik
+o&rsquo;chiriladi; sizga bog&rsquo;lanmagan kesh (yuborilgan videolarning Telegram identifikatorlari va qo&rsquo;shiq
+nomlari) &mdash; 180 kundan keyin.</p>
+
 <p><strong>Yig&rsquo;ilmaydi:</strong> parollar, to&rsquo;lov ma&rsquo;lumotlari, kontaktlaringiz, postlaringiz,
 obunachilaringiz, joylashuvingiz va siz ataylab yubormagan hech qanday xabar mazmuni.</p>
 
@@ -135,8 +144,8 @@ obunachilaringiz, joylashuvingiz va siz ataylab yubormagan hech qanday xabar maz
 <strong>ishlov berilishi bilanoq o&rsquo;chiriladi</strong>. Hech qayerda saqlanmaydi va tarqatilmaydi.</p>
 
 <h2>Kimlar bilan bo&rsquo;lishiladi</h2>
-<p>Meta/Instagram (IGSID va javob matni), Telegram (foydalanuvchi ID va javob), AudD.io (bir necha soniyalik audio
-parcha), Deezer (faqat qo&rsquo;shiq nomi va ijrochi), Supabase (baza). Boshqa hech kim bilan bo&rsquo;lishilmaydi,
+<p>Meta/Instagram (IGSID va javob matni), Telegram (foydalanuvchi ID va javob), Shazam va zaxira sifatida AudD.io
+(bir necha soniyalik audio parcha), Deezer (faqat qo&rsquo;shiq nomi va ijrochi), Supabase (baza), Render (server). Boshqa hech kim bilan bo&rsquo;lishilmaydi,
 hech kimga sotilmaydi.</p>
 
 <h2>Ma&rsquo;lumotni o&rsquo;chirish</h2>
