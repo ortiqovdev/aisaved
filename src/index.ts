@@ -1,3 +1,6 @@
+import type { Server } from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { env, isProd } from './config/env.ts';
 import { logger } from './lib/logger.ts';
@@ -12,6 +15,10 @@ import { instagramWebhookRouter } from './webhook/instagram.ts';
 import { devMockRouter } from './webhook/dev-mock.ts';
 import { startWorkers, stopWorkers, workerStatus } from './workers/index.ts';
 import { cleanupTmpDir, ensureTmpDir, startTmpCleanup, stopTmpCleanup } from './services/media.ts';
+import { startRetention, stopRetention } from './db/retention.ts';
+
+/** docs/ — loyiha ildizida; src/index.ts (dev) va dist/index.js (build) dan bir xil masofa. */
+const DOCS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
 
 const app = express();
 
@@ -45,6 +52,11 @@ app.get('/health', async (_req, res) => {
 });
 
 app.use('/webhook/instagram', instagramWebhookRouter);
+
+// Meta App'ni Live rejimga o'tkazish uchun Privacy Policy URL talab qilinadi
+app.get('/privacy', (_req, res) => {
+  res.sendFile(path.join(DOCS_DIR, 'index.html'));
+});
 
 // Faqat Instagram mock rejimida — webhook'ni taqlid qiluvchi endpointlar
 if (env.MOCK_INSTAGRAM) {
@@ -134,6 +146,46 @@ function superviseRunner(): { stop: () => Promise<void> } {
   };
 }
 
+/**
+ * Bepul hostingda uxlab qolmaslik: o'z manzilimizga tashqaridan (proksi
+ * orqali) har 10 daqiqada murojaat — Render 15 daqiqa jimlikdan keyin uxlatadi.
+ */
+const KEEPALIVE_INTERVAL_MS = 10 * 60_000;
+
+function startKeepAlive(): void {
+  if (!env.KEEPALIVE_URL) return;
+  const url = `${env.KEEPALIVE_URL}/health`;
+  logger.info({ url }, 'Keep-alive yoqildi');
+  setInterval(() => {
+    fetch(url, { signal: AbortSignal.timeout(30_000) })
+      .then((r) => {
+        if (!r.ok) logger.warn({ status: r.status }, 'Keep-alive: /health javob bermadi');
+      })
+      .catch((e: unknown) => logger.warn({ err: errMessage(e) }, 'Keep-alive so\'rovi yiqildi'));
+  }, KEEPALIVE_INTERVAL_MS).unref();
+}
+
+/** HTTP serverni ochadi; port band bo'lsa — tushunarli xabar bilan to'xtaydi. */
+function listen(port: number): Promise<Server> {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port);
+    server.once('listening', () => {
+      logger.info({ port, env: env.NODE_ENV }, 'HTTP server tayyor — webhook: /webhook/instagram');
+      resolve(server);
+    });
+    server.once('error', (e: NodeJS.ErrnoException) => {
+      reject(
+        e.code === 'EADDRINUSE'
+          ? new Error(
+              `${port}-port band — bot allaqachon boshqa oynada ishlayapti. ` +
+                `Avvalgisini to'xtating (Ctrl+C) yoki .env da PORT ni o'zgartiring.`,
+            )
+          : e,
+      );
+    });
+  });
+}
+
 async function main(): Promise<void> {
   logger.info(
     {
@@ -150,6 +202,10 @@ async function main(): Promise<void> {
         'Sinov: POST /dev/mock/text, POST /dev/mock/reel',
     );
   }
+
+  // Port birinchi band qilinadi: bot allaqachon ishlab turgan bo'lsa, ikkinchi
+  // nusxa Telegram'ga tegmasdan (update'larni o'chirmasdan) darhol chiqadi
+  const server = await listen(env.PORT);
 
   await assertDbReady();
   await ensureTmpDir();
@@ -177,13 +233,6 @@ async function main(): Promise<void> {
     logger.warn({ err: errMessage(e) }, 'Buyruqlar menyusini yangilab bo\'lmadi — keyingi safar'),
   );
 
-  const server = app.listen(env.PORT, () => {
-    logger.info(
-      { port: env.PORT, env: env.NODE_ENV },
-      `HTTP server tayyor — webhook: /webhook/instagram`,
-    );
-  });
-
   // Telegram: long polling (webhook URL kerak emas). Agar oldin webhook
   // o'rnatilgan bo'lsa, uni olib tashlaymiz.
   //
@@ -196,11 +245,14 @@ async function main(): Promise<void> {
   const polling = superviseRunner();
 
   startWorkers();
+  startRetention();
+  startKeepAlive();
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'To\'xtatilmoqda...');
     stopWorkers();
     stopTmpCleanup();
+    stopRetention();
     try {
       await polling.stop();
     } catch (e) {

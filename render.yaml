@@ -1,0 +1,40 @@
+# Render Blueprint — botni Render'ning bepul tarifiga joylash.
+# Render → New → Blueprint → shu repozitoriy. Yo'riqnoma: RENDER.md
+#
+# Maxfiy kalitlar (sync: false) bu faylga YOZILMAYDI — Render ularni
+# Blueprint yaratishda panelda so'raydi.
+services:
+  - type: web
+    name: aisaved-bot
+    runtime: docker
+    plan: free
+    # Telegram (Amsterdam) va Supabase'ga yaqin
+    region: frankfurt
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MOCK_INSTAGRAM
+        value: 'false'
+      # Bepul tarif: 512 MB RAM, 0.1 vCPU — parallel ffmpeg/yt-dlp kamroq
+      - key: WORKER_CONCURRENCY
+        value: '4'
+      - key: MAX_PENDING_PER_USER
+        value: '10'
+      - key: BOT_TIMEZONE
+        value: Asia/Tashkent
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: IG_ACCOUNT_USERNAME
+        sync: false
+      - key: IG_APP_SECRET
+        sync: false
+      - key: IG_ACCESS_TOKEN
+        sync: false
+      - key: IG_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

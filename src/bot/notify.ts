@@ -234,7 +234,11 @@ export async function sendSongOnly(
 }
 
 export async function sendText(telegramId: number, text: string): Promise<void> {
-  await bot.api.sendMessage(telegramId, text, { parse_mode: 'HTML' });
+  // Havola ko'rinishi (masalan Instagram profili) xabarni katta kartaga aylantirmasin
+  await bot.api.sendMessage(telegramId, text, {
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+  });
 }
 
 /** Xato bo'lsa ham chaqiruvchini to'xtatmaydi (masalan user botni bloklagan). */

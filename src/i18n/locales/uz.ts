@@ -70,6 +70,7 @@ Istalgan chatda <code>@{bot} havola</code> deb yozing — videoni chatdan chiqma
   notRegistered: `Siz hali ro'yxatdan o'tmagansiz. /start bosing.`,
   statusLinked: `🔗 Holat: <b>bog'langan</b> ✅`,
   statusLinkedAt: `📅 Bog'langan sana: {date}`,
+  statusIgAccount: `📸 Instagram: {igUser}`,
   statusNotLinked: `🔗 Holat: <b>bog'lanmagan</b> ⏳`,
   statusYourCode: `🔑 Kodingiz: <code>{code}</code>`,
   statusSendCodeTo: `Uni Instagram'da @{account} ga DM qiling.`,
@@ -163,7 +164,10 @@ Yordam: /help · Holat: /status · Til: /language`,
 
   igLinkedTelegram: `✅ <b>Instagram akkauntingiz bog'landi!</b>
 
-Endi Instagram'da <b>@{account}</b> ga reels yuboring — videoni va musiqa nomini shu yerga tashlayman.`,
+👤 Akkaunt: {igUser}
+🕒 Bog'langan vaqt: {time}
+
+Endi Instagram'da <b>@{account}</b> ga reels va postlarni yuboring — videoni va musiqa nomini shu yerga tashlayman.`,
   igReelQueued: `⏳ Reels qabul qilindi, ishlov berilmoqda...`,
   igNotDownloadable: `😕 Instagram bu reels'ning video faylini bermadi — bu Instagram tomonidagi cheklov.
 
@@ -186,9 +190,16 @@ Hozircha videoni o'zingiz saqlab shu yerga tashlang — musiqa nomini darhol top
   igNotLinked: `❗️ Siz hali Telegram botiga bog'lanmagansiz.
 
 Telegram'da botimizga /start bering, u sizga LINK-XXXXXX ko'rinishidagi kod beradi. O'sha kodni shu yerga yuboring — shundan keyin reels tashlashingiz mumkin.`,
-  igLinkSuccess: `✅ Bog'landi!
+  igLinkSuccess: `🔗 Bot bilan aloqa mavjud!
 
-Endi yoqqan reels'ingizni shu yerga "Yuborish" qiling — videoni va musiqa nomini Telegram botingizga yuboraman.`,
+Endi reels va postlarni shu yerga yuborishingiz mumkin — videoni va qo'shiq nomini Telegram botingizga yuboraman.`,
+  igFollowFirst: `👋 Bitta qadam qoldi: avval @{account} ga obuna bo'ling.
+
+instagram.com/{account} ni oching, "Obuna bo'lish" ni bosing, keyin pastdagi "✅ Obuna bo'ldim" tugmasini bosing — akkauntingizni bog'layman.`,
+  igFollowNotYet: `🙁 Obunangiz hali ko'rinmayapti.
+
+@{account} ga obuna bo'ling (instagram.com/{account}) va "✅ Obuna bo'ldim" ni qayta bosing.`,
+  igFollowButton: `✅ Obuna bo'ldim`,
   igCodeNotFound: `❌ Bunday kod topilmadi yoki u allaqachon ishlatilgan.
 
 Telegram botida /start bosib yangi kod oling.`,

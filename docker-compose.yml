@@ -5,11 +5,19 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    # Faqat serverning o'zidan (127.0.0.1): tashqaridan kirish HTTPS proksi
+    # (Caddy) orqali — ilova porti internetga ochiq turmasin
     ports:
-      - '${PORT:-3000}:3000'
+      - '127.0.0.1:${PORT:-3000}:3000'
     environment:
       NODE_ENV: production
       PORT: 3000
+    # Docker loglari sukut bo'yicha cheksiz o'sadi — VPS diski to'lmasin
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

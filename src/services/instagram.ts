@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
-import { PermanentError, TransientError, fetchWithTimeout, errMessage } from '../lib/errors.ts';
+import { PermanentError, TransientError, fetchWithTimeout, errMessage, sleep } from '../lib/errors.ts';
 
 /**
  * Meta webhook imzosini tekshiradi (X-Hub-Signature-256).
@@ -37,9 +37,20 @@ export function verifyWebhookSignature(rawBody: Buffer, signatureHeader: string 
  * 24 soat ichida javob berish mumkin. Biz webhook kelgan zahoti javob
  * berayotganimiz uchun bu shart bajariladi.
  */
-export async function sendInstagramText(igScopedId: string, text: string): Promise<void> {
+/** Xabar ostidagi tugma: bosilganda `title` matni `payload` bilan qaytib keladi. */
+export interface IgQuickReply {
+  /** Instagram limiti — 20 belgi. */
+  title: string;
+  payload: string;
+}
+
+export async function sendInstagramText(
+  igScopedId: string,
+  text: string,
+  quickReplies: IgQuickReply[] = [],
+): Promise<void> {
   if (env.MOCK_INSTAGRAM) {
-    logger.info({ igScopedId, text }, '📨 [MOCK] Instagram DM (haqiqatda yuborilmadi)');
+    logger.info({ igScopedId, text, quickReplies }, '📨 [MOCK] Instagram DM (haqiqatda yuborilmadi)');
     return;
   }
 
@@ -55,7 +66,18 @@ export async function sendInstagramText(igScopedId: string, text: string): Promi
       },
       body: JSON.stringify({
         recipient: { id: igScopedId },
-        message: { text },
+        message: {
+          text,
+          ...(quickReplies.length > 0
+            ? {
+                quick_replies: quickReplies.map((q) => ({
+                  content_type: 'text',
+                  title: q.title,
+                  payload: q.payload,
+                })),
+              }
+            : {}),
+        },
       }),
     },
     20_000,
@@ -74,11 +96,53 @@ export async function sendInstagramText(igScopedId: string, text: string): Promi
 }
 
 /** Xato bo'lsa ham asosiy oqimni to'xtatmaydigan variant. */
-export async function trySendInstagramText(igScopedId: string, text: string): Promise<void> {
+export async function trySendInstagramText(
+  igScopedId: string,
+  text: string,
+  quickReplies: IgQuickReply[] = [],
+): Promise<void> {
   try {
-    await sendInstagramText(igScopedId, text);
+    await sendInstagramText(igScopedId, text, quickReplies);
   } catch (e) {
     logger.warn({ igScopedId, err: errMessage(e) }, 'Instagram DM yuborilmadi');
+  }
+}
+
+export interface IgProfile {
+  username: string | null;
+  name: string | null;
+  /** Foydalanuvchi bizning akkauntga obuna bo'lganmi; null — aniqlab bo'lmadi. */
+  followsUs: boolean | null;
+}
+
+/**
+ * Bizga yozgan foydalanuvchining profili (Instagram User Profile API).
+ * Faqat bizga DM yozgan foydalanuvchi uchun ishlaydi. Xato bo'lsa — maydonlar
+ * null: bog'lanish Meta'dagi nosozlik tufayli to'xtab qolmasin.
+ */
+export async function getInstagramProfile(igScopedId: string): Promise<IgProfile> {
+  if (env.MOCK_INSTAGRAM) return { username: `mock_${igScopedId}`, name: null, followsUs: true };
+
+  try {
+    const res = await fetchWithTimeout(
+      `${env.IG_GRAPH_BASE_URL}/${encodeURIComponent(igScopedId)}?fields=username,name,is_user_follow_business`,
+      { headers: { Authorization: `Bearer ${env.IG_ACCESS_TOKEN}` } },
+      10_000,
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      logger.warn({ igScopedId, status: res.status, body: body.slice(0, 300) }, 'Instagram profilini olib bo\'lmadi');
+      return { username: null, name: null, followsUs: null };
+    }
+    const j = (await res.json()) as { username?: string; name?: string; is_user_follow_business?: boolean };
+    return {
+      username: j.username ?? null,
+      name: j.name ?? null,
+      followsUs: typeof j.is_user_follow_business === 'boolean' ? j.is_user_follow_business : null,
+    };
+  } catch (e) {
+    logger.warn({ igScopedId, err: errMessage(e) }, 'Instagram profilini olib bo\'lmadi');
+    return { username: null, name: null, followsUs: null };
   }
 }
 
@@ -129,45 +193,96 @@ export async function trySendInstagramAction(
 }
 
 /**
- * Foydalanuvchi yuborgan reels'ga qo'yiladigan reaksiya.
- *
- * Instagram'da video yuborgan foydalanuvchiga holat reaksiya bilan
- * bildiriladi (bitta xabarda bitta reaksiya — yangisi eskisining o'rnini oladi):
+ * Foydalanuvchi yuborgan xabarga qo'yiladigan reaksiya — Instagram chatini
+ * matnli xabarlar bilan to'ldirmaslik uchun holat SHU bilan bildiriladi
+ * (bitta xabarda bitta reaksiya — yangisi eskisining o'rnini oladi):
  *   ⌛ qabul qilindi, ishlanmoqda → ✅ natija Telegram'ga yuborildi
- *                                 → ❌ xato (sababi Instagram chatiga yoziladi)
- * (API emoji'ni to'g'ridan-to'g'ri qabul qiladi; "like" kabi nomlar esa
- * "Invalid reaction" bilan rad etiladi.)
+ *                                 → ❌ xato (sababi Telegram'ga yoziladi)
+ *   🔗 bog'lash kodi qabul qilindi
+ * (API emoji'ni to'g'ridan-to'g'ri qabul qiladi.)
  */
-export const IG_REACTION = { wait: '⌛', ok: '✅', fail: '❌' } as const;
+export const IG_REACTION = { wait: '⌛', ok: '✅', fail: '❌', linked: '🔗' } as const;
 export type IgReaction = (typeof IG_REACTION)[keyof typeof IG_REACTION];
 
-/** Reaksiya qo'yadi. Xato asosiy oqimni to'xtatmaydi — faqat log qilinadi. */
+/**
+ * Meta reaksiya so'rovini tez-tez vaqtinchalik xato bilan qaytaradi
+ * (500, `code: 2`, "An unexpected error has occurred. Please retry your
+ * request later"), keyinroq esa o'sha so'rov o'tadi. Shuning uchun qayta
+ * uriniladi — Meta tavsiyasiga ko'ra oraliq soniyalar, keyin o'nlab soniyalar.
+ */
+const REACTION_RETRY_DELAYS_MS = [3_000, 15_000, 45_000];
+
+/** Har bir xabar uchun eng oxirgi so'ralgan reaksiya — eskisining qayta urinishi to'xtaydi. */
+const latestReaction = new Map<string, IgReaction>();
+/** Har bir xabar uchun ayni paytda ketayotgan so'rov — reaksiyalar tartibi aralashmasin. */
+const inflightReaction = new Map<string, Promise<unknown>>();
+
+const isTransientStatus = (status: number): boolean => status === 429 || status >= 500;
+
+/**
+ * Reaksiya qo'yadi; vaqtinchalik xatoda qayta urinadi. Xato asosiy oqimni
+ * to'xtatmaydi.
+ *
+ * @returns true — reaksiya qo'yildi YOKI uning o'rnini yangisi egalladi
+ *          (ya'ni foydalanuvchi baribir holatni ko'radi); false — qo'yib
+ *          bo'lmadi, chaqiruvchi zaxira sifatida matn yuborishi mumkin
+ */
 export async function trySendInstagramReaction(
   igScopedId: string,
   messageId: string,
   reaction: IgReaction,
-): Promise<void> {
+): Promise<boolean> {
   if (env.MOCK_INSTAGRAM) {
     logger.info({ igScopedId, reaction }, '💬 [MOCK] Instagram reaksiya (haqiqatda qo\'yilmadi)');
-    return;
+    return true;
   }
 
+  latestReaction.set(messageId, reaction);
+  const superseded = (): boolean => latestReaction.get(messageId) !== reaction;
+
   try {
-    const res = await postMessagesApi({
-      recipient: { id: igScopedId },
-      sender_action: 'react',
-      payload: { message_id: messageId, reaction },
-    });
-    if (res.ok) {
-      logger.debug({ igScopedId, reaction }, 'Instagram reaksiya qo\'yildi');
-    } else {
-      logger.warn(
-        { igScopedId, reaction, status: res.status, body: res.body.slice(0, 300) },
-        'Instagram reaksiya qabul qilinmadi',
-      );
+    for (let attempt = 0; ; attempt += 1) {
+      // Oldingi reaksiya so'rovi hali yo'lda bo'lsa — u Meta'ga BIZDAN KEYIN
+      // yetib, yangi reaksiyaning ustidan yozmasligi uchun kutamiz
+      await inflightReaction.get(messageId)?.catch(() => undefined);
+      if (superseded()) return true;
+
+      const request = postMessagesApi({
+        recipient: { id: igScopedId },
+        sender_action: 'react',
+        payload: { message_id: messageId, reaction },
+      });
+      inflightReaction.set(messageId, request);
+
+      let status = 0;
+      let body = '';
+      try {
+        const res = await request;
+        if (res.ok) {
+          logger.debug({ igScopedId, reaction, attempt }, 'Instagram reaksiya qo\'yildi');
+          return true;
+        }
+        ({ status, body } = res);
+      } catch (e) {
+        body = errMessage(e); // tarmoq xatosi — vaqtinchalik
+      } finally {
+        if (inflightReaction.get(messageId) === request) inflightReaction.delete(messageId);
+      }
+
+      const delay = REACTION_RETRY_DELAYS_MS[attempt];
+      const transient = status === 0 || isTransientStatus(status);
+      if (!transient || delay === undefined) {
+        logger.warn(
+          { igScopedId, reaction, status, attempts: attempt + 1, body: body.slice(0, 300) },
+          'Instagram reaksiya qabul qilinmadi',
+        );
+        return false;
+      }
+      logger.debug({ igScopedId, reaction, status, retryInMs: delay }, 'Instagram reaksiya: qayta urinamiz');
+      await sleep(delay);
     }
-  } catch (e) {
-    logger.warn({ igScopedId, reaction, err: errMessage(e) }, 'Instagram reaksiya yuborilmadi');
+  } finally {
+    if (latestReaction.get(messageId) === reaction) latestReaction.delete(messageId);
   }
 }
 
@@ -217,6 +332,8 @@ export interface IgMessagingEvent {
     is_deleted?: boolean;
     is_unsupported?: boolean;
     attachments?: IgAttachment[];
+    /** Quick reply tugmasi bosilganda — biz bergan payload. */
+    quick_reply?: { payload?: string };
   };
   read?: unknown;
   reaction?: unknown;

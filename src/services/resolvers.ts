@@ -5,7 +5,7 @@ import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { PermanentError, TransientError, errMessage, fetchWithTimeout } from '../lib/errors.ts';
 import { msg } from '../i18n/index.ts';
-import { resolveInstagramMedia, type ResolvedItem } from './ig-resolver.ts';
+import { isResolverConfigured, resolveInstagramMedia, type ResolvedItem } from './ig-resolver.ts';
 import { ensureTmpDir, runCommand, safeUnlink, type DownloadedFile } from './media.ts';
 import type { Platform } from './links.ts';
 
@@ -48,7 +48,9 @@ export async function resolvePost(
 ): Promise<ResolvedPost> {
   switch (platform) {
     case 'instagram':
-      return { items: (await resolveInstagramMedia(url)).items };
+      return isResolverConfigured()
+        ? { items: (await resolveInstagramMedia(url)).items }
+        : resolveInstagramWithYtDlp(url, jobId);
     case 'tiktok':
       return resolveTikTok(url);
     case 'pinterest':
@@ -190,65 +192,192 @@ async function resolvePinterest(link: string): Promise<ResolvedPost> {
 /**
  * H.264 + AAC (Telegram'da hamma joyda o'ynaydi), 1080p gacha, ffmpeg bilan
  * bitta mp4 ga birlashtiriladi. YouTube endi video va ovozni alohida beradi.
+ *
+ * Sifat HAJMGA qarab tanlanadi: limitga sig'adigan eng yaxshi format. Faqat
+ * https (DASH) formatlarida aniq `filesize` bor — m3u8 formatlarida hajm
+ * noma'lum, shuning uchun ular birinchi tanlovga kirmaydi. Ilgari 3.5
+ * daqiqalik klipda ham 1080p (77 MB) tanlanib, limitdan oshib qolardi.
+ * Ovoz uchun limitning 20% i qoldiriladi.
  */
-const YT_FORMAT = 'bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b';
+function youtubeFormat(maxBytes: number): string {
+  const videoBudget = Math.floor(maxBytes * 0.8);
+  return [
+    `bv*[ext=mp4][vcodec^=avc1][height<=1080][protocol=https][filesize<${videoBudget}]+ba[ext=m4a][protocol=https]`,
+    `b[ext=mp4][protocol=https][filesize<${maxBytes}]`,
+    // Hajmi noma'lum bo'lsa — past sifat (baribir --max-filesize himoyalaydi)
+    'bv*[ext=mp4][vcodec^=avc1][height<=480]+ba[ext=m4a]',
+    'b[height<=480]',
+    'b',
+  ].join('/');
+}
 
-async function resolveYouTube(link: string, jobId: number): Promise<ResolvedPost> {
-  const dir = await ensureTmpDir();
-  const base = path.join(dir, `yt-${jobId}-${randomUUID().slice(0, 8)}`);
-  const maxMb = Math.floor(env.MAX_VIDEO_BYTES / (1024 * 1024));
-  const ffmpegDir = /[\\/]/.test(env.FFMPEG_PATH) ? ['--ffmpeg-location', path.dirname(env.FFMPEG_PATH)] : [];
+const resolveYouTube = (link: string, jobId: number): Promise<ResolvedPost> =>
+  downloadWithYtDlp(link, jobId, {
+    label: 'YouTube',
+    prefix: 'yt',
+    format: youtubeFormat(env.MAX_VIDEO_BYTES),
+    maxSeconds: env.YOUTUBE_MAX_SECONDS,
+  });
 
-  const args = [
-    '--no-simulate', '-j', '--no-warnings', '--no-progress', '--no-playlist',
-    '--js-runtimes', 'node',
-    ...ffmpegDir,
-    '-f', YT_FORMAT,
-    '--merge-output-format', 'mp4',
-    '--max-filesize', `${maxMb}M`,
-    '--match-filter', `duration<=?${env.YOUTUBE_MAX_SECONDS}`,
-    '-o', `${base}.%(ext)s`,
-    link,
-  ];
+/**
+ * Instagram — IG_RESOLVER_URL sozlanmagan bo'lsa, yt-dlp orqali (bepul,
+ * login'siz). Meta DM'da ulashilgan reels uchun video emas, faqat sahifa
+ * havolasini beradi — shu yo'l bilan u baribir yuklanadi. Instagram
+ * login'siz so'rovlarni cheklashi mumkin; unda "rate-limit / login required"
+ * xatosi keladi va foydalanuvchiga videoni o'zi tashlash taklif qilinadi.
+ *
+ * Tezkor yo'l: yt-dlp faylni YUKLAMAYDI — faqat to'g'ridan-to'g'ri mp4
+ * havolasini oladi (~4 s), Telegram esa videoni shu havoladan o'zi tortadi.
+ * Server faylni yuklab, keyin Telegram'ga qayta yuklashi shart emas (ilgari
+ * 2.8 MB reels uchun jami ~18 s edi). Instagram CDN havolasi IP'ga bog'lanmagan
+ * (YouTube'dan farqli). Telegram ololmasa — worker o'zi yuklab yuboradi.
+ * Reels faqat alohida video+ovoz (DASH) ko'rinishida bo'lsa — yuklab birlashtiramiz.
+ */
+export async function resolveInstagramWithYtDlp(link: string, jobId: number): Promise<ResolvedPost> {
+  const direct = await instagramDirectUrl(link);
+  if (direct) return { items: [{ url: direct.url, kind: 'video', thumb: direct.thumb }] };
+  return downloadWithYtDlp(link, jobId, {
+    label: 'Instagram',
+    prefix: 'ig',
+    format: 'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
+  });
+}
 
-  let stdout = '';
-  let stderr = '';
+/**
+ * Ovozi bilan birga bitta fayl bo'lgan mp4 havolasi (progressive format).
+ * @returns null — bunday format yo'q (faqat alohida video+ovoz)
+ * @throws  post yopiq/o'chirilgan, video yo'q, Instagram chekladi va h.k.
+ */
+async function instagramDirectUrl(link: string): Promise<{ url: string; thumb: string | null } | null> {
+  const { stdout, stderr } = await runYtDlp(
+    [
+      '--no-warnings', '--no-playlist',
+      // `b` — ovozi ham, videosi ham bor bitta fayl
+      '-f', 'b[ext=mp4]',
+      '--print', '%(.{url,thumbnail})j',
+      link,
+    ],
+    60_000,
+  );
+
+  const line = stdout.split('\n').find((l) => l.trimStart().startsWith('{'));
+  if (line) {
+    try {
+      const j = JSON.parse(line) as { url?: string; thumbnail?: string };
+      if (j.url && /^https:\/\//.test(j.url) && !j.url.includes('.m3u8')) {
+        return { url: j.url, thumb: j.thumbnail ?? null };
+      }
+    } catch {
+      // buzuq JSON — pastda yuklab olish yo'liga o'tamiz
+    }
+  }
+  const out = `${stdout}\n${stderr}`;
+  if (line || /requested format is not available/i.test(out)) return null;
+  logger.warn({ link, out: out.slice(-400) }, 'yt-dlp havolani ochmadi');
+  throw ytDlpFailure('Instagram', out);
+}
+
+/** yt-dlp'ni ishga tushiradi; dastur yo'q bo'lsa — foydalanuvchiga tushunarli xato. */
+async function runYtDlp(args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
   try {
-    ({ stdout, stderr } = await runCommand(env.YTDLP_PATH, args, 180_000, { allowFailure: true }));
+    return await runCommand(env.YTDLP_PATH, args, timeoutMs, { allowFailure: true });
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new PermanentError('yt-dlp topilmadi (YTDLP_PATH)', msg('errPlatformUnavailable'));
     }
     throw new TransientError(`yt-dlp: ${errMessage(e)}`);
   }
+}
+
+/** yt-dlp chiqishidan xato turini aniqlaydi: doimiy (qayta urinish foydasiz) yoki vaqtinchalik. */
+function ytDlpFailure(label: string, out: string): Error {
+  const maxMb = Math.floor(env.MAX_VIDEO_BYTES / (1024 * 1024));
+  if (/does not pass filter/i.test(out)) {
+    return new PermanentError(`${label}: video juda uzun`, msg('errVideoTooLong'));
+  }
+  if (/larger than max-filesize/i.test(out)) {
+    return new PermanentError(`${label}: fayl limitdan katta`, msg('errVideoOverLimit', {
+      limit: `${maxMb} MB`,
+    }));
+  }
+  // Instagram: rasm yoki faqat rasmlardan iborat karusel — yt-dlp faqat video oladi
+  if (/no video formats found|there is no video/i.test(out)) {
+    return new PermanentError(`${label}: postda video yo'q`, msg('errResolverNoVideo'));
+  }
+  // "empty media response" — Instagram: post o'chirilgan, yopiq yoki login talab qiladi
+  if (/private|unavailable|removed|not available|sign in|login required|empty media response/i.test(out)) {
+    return new PermanentError(`${label}: ${out.trim().split('\n').at(-1)}`, msg('errResolverCantFetch'));
+  }
+  return new TransientError(`yt-dlp natija bermadi: ${out.trim().slice(-300)}`);
+}
+
+interface YtDlpOptions {
+  /** Log va xato matnlari uchun. */
+  label: string;
+  /** Vaqtinchalik fayl nomi prefiksi. */
+  prefix: string;
+  format: string;
+  /** Shundan uzun videolar yuklanmaydi (sekund); berilmasa — cheklovsiz. */
+  maxSeconds?: number;
+}
+
+async function downloadWithYtDlp(link: string, jobId: number, opts: YtDlpOptions): Promise<ResolvedPost> {
+  const { label } = opts;
+  const dir = await ensureTmpDir();
+  const base = path.join(dir, `${opts.prefix}-${jobId}-${randomUUID().slice(0, 8)}`);
+  const maxMb = Math.floor(env.MAX_VIDEO_BYTES / (1024 * 1024));
+  const ffmpegDir = /[\\/]/.test(env.FFMPEG_PATH) ? ['--ffmpeg-location', path.dirname(env.FFMPEG_PATH)] : [];
+
+  // Qo'shiq uchun faqat track/artist maydonlari chop etiladi: to'liq `-j`
+  // JSON'i (subtitr havolalari bilan) 512 KB dan oshib, undan keyingi
+  // "does not pass filter" / "larger than max-filesize" xabarlarini
+  // runCommand chegarasidan tashqariga surib yuborardi — shunda bu xatolar
+  // vaqtinchalik deb hisoblanib, bekorga qayta urinilardi. `--print` jim
+  // rejimni yoqadi, `--no-quiet` o'sha xabarlarni qaytaradi.
+  const args = [
+    '--no-simulate', '--print', 'after_move:%(.{track,artist,artists})j',
+    '--no-quiet', '--no-warnings', '--no-progress', '--no-playlist',
+    '--js-runtimes', 'node',
+    ...ffmpegDir,
+    '-f', opts.format,
+    '--merge-output-format', 'mp4',
+    '--max-filesize', `${maxMb}M`,
+    ...(opts.maxSeconds ? ['--match-filter', `duration<=?${opts.maxSeconds}`] : []),
+    '-o', `${base}.%(ext)s`,
+    link,
+  ];
+
+  const { stdout, stderr } = await runYtDlp(args, 180_000);
 
   const filePath = `${base}.mp4`;
   const stat = await fsp.stat(filePath).catch(() => null);
   if (!stat || stat.size === 0) {
-    await safeUnlink(filePath);
+    await removeWithPrefix(base);
     const out = `${stdout}\n${stderr}`;
     logger.warn({ link, out: out.slice(-400) }, 'yt-dlp faylni yuklamadi');
-    if (/does not pass filter/i.test(out)) {
-      throw new PermanentError('YouTube: video juda uzun', msg('errVideoTooLong'));
-    }
-    if (/larger than max-filesize/i.test(out)) {
-      throw new PermanentError('YouTube: fayl limitdan katta', msg('errVideoOverLimit', {
-        limit: `${maxMb} MB`,
-      }));
-    }
-    if (/private|unavailable|removed|not available|sign in/i.test(out)) {
-      throw new PermanentError(`YouTube: ${out.trim().split('\n').at(-1)}`, msg('errResolverCantFetch'));
-    }
-    throw new TransientError(`yt-dlp natija bermadi: ${out.trim().slice(-300)}`);
+    throw ytDlpFailure(label, out);
   }
 
   const music = youtubeMusicOf(stdout);
-  logger.info({ link, bytes: stat.size, music }, 'YouTube video yuklab olindi');
+  logger.info({ link, bytes: stat.size, music }, `${label} video yuklab olindi`);
   return {
     items: [],
     downloaded: [{ filePath, bytes: stat.size, contentType: 'video/mp4' }],
     music,
   };
+}
+
+/**
+ * yt-dlp to'xtatilgan yuklashdan qoldirgan fayllarni (`<base>.f137.mp4.part`,
+ * `<base>.f140.m4a` ...) o'chiradi — ular tmp papkada o'nlab MB joy egallaydi.
+ */
+async function removeWithPrefix(base: string): Promise<void> {
+  const dir = path.dirname(base);
+  const prefix = `${path.basename(base)}.`;
+  const names = await fsp.readdir(dir).catch(() => [] as string[]);
+  for (const name of names) {
+    if (name.startsWith(prefix)) await safeUnlink(path.join(dir, name));
+  }
 }
 
 /**

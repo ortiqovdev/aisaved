@@ -21,6 +21,8 @@ RUN apk add --no-cache ffmpeg python3 \
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
+# /privacy sahifasi (Meta App Live rejimi uchun Privacy Policy URL)
+COPY docs ./docs
 
 # root emas
 USER node

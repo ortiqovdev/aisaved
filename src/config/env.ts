@@ -17,6 +17,18 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  /** Foydalanuvchiga ko'rsatiladigan vaqtlar mintaqasi (server qayerda turishidan qat'i nazar). */
+  BOT_TIMEZONE: z
+    .string()
+    .default('Asia/Tashkent')
+    .refine((tz) => {
+      try {
+        new Intl.DateTimeFormat('en', { timeZone: tz });
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'BOT_TIMEZONE yaroqsiz (masalan: Asia/Tashkent)'),
 
   // Telegram
   TELEGRAM_BOT_TOKEN: z.string().min(20, 'TELEGRAM_BOT_TOKEN yaroqsiz'),
@@ -94,6 +106,17 @@ const envSchema = z.object({
   /** AudD'ga kunlik so'rovlar chegarasi — xarajat oldindan ma'lum bo'lsin (0 = cheksiz). */
   AUDD_DAILY_LIMIT: z.coerce.number().int().min(0).default(100),
 
+  /**
+   * Bepul hostinglar (Render) 15 daqiqa kirish so'rovi bo'lmasa servisni
+   * uxlatadi — Telegram long polling esa chiquvchi ulanish, uni uyg'otmaydi.
+   * Berilsa, server o'zining `/health` manziliga shu URL orqali (tashqaridan)
+   * har 10 daqiqada murojaat qiladi. Render uni o'zi beradi: RENDER_EXTERNAL_URL.
+   */
+  KEEPALIVE_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== '' ? v.trim().replace(/\/+$/, '') : process.env['RENDER_EXTERNAL_URL'] || '')),
+
   // Supabase
   SUPABASE_URL: z.string().url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(20),
@@ -110,8 +133,18 @@ const envSchema = z.object({
    * 48MB (xavfsizlik zaxirasi bilan).
    */
   MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(48 * 1024 * 1024),
+  /**
+   * Tugagan (done/failed) so'rovlar shuncha kundan keyin o'chiriladi — bepul
+   * Supabase'dagi 500 MB baza to'lib qolmasin. 0 — o'chirilmaydi.
+   */
+  REQUESTS_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
+  /**
+   * Media va qo'shiq keshi (media_cache, song_cache) shuncha kundan keyin
+   * o'chiriladi. Eski post qayta so'ralsa — shunchaki qaytadan yuklanadi. 0 — o'chirilmaydi.
+   */
+  CACHE_RETENTION_DAYS: z.coerce.number().int().min(0).default(180),
   /** Bitta foydalanuvchi navbatda ushlab turishi mumkin bo'lgan so'rovlar soni. */
-  MAX_PENDING_PER_USER: z.coerce.number().int().min(1).max(50).default(3),
+  MAX_PENDING_PER_USER: z.coerce.number().int().min(1).max(50).default(10),
   /**
    * AudD'ga yuboriladigan audio parchaning uzunligi (sekund).
    * AudD hujjatlari 2–12 sekundni tavsiya qiladi; uzunroq parcha bilan

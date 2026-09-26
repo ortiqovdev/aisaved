@@ -70,6 +70,7 @@ Instagram-да @{account} аккаунтына Reels бөлісіңіз.
   notRegistered: `Сіз әлі тіркелмегенсіз. /start басыңыз.`,
   statusLinked: `🔗 Күйі: <b>байланыстырылған</b> ✅`,
   statusLinkedAt: `📅 Байланыстырылған күні: {date}`,
+  statusIgAccount: `📸 Instagram: {igUser}`,
   statusNotLinked: `🔗 Күйі: <b>байланыстырылмаған</b> ⏳`,
   statusYourCode: `🔑 Сіздің кодыңыз: <code>{code}</code>`,
   statusSendCodeTo: `Оны Instagram-да @{account} аккаунтына директ арқылы жіберіңіз.`,
@@ -163,7 +164,10 @@ Instagram-да @{account} аккаунтына Reels бөлісіңіз.
 
   igLinkedTelegram: `✅ <b>Instagram аккаунтыңыз байланыстырылды!</b>
 
-Енді Instagram-да <b>@{account}</b> аккаунтына Reels бөлісіңіз — видео мен ән атауын осында жіберемін.`,
+👤 Аккаунт: {igUser}
+🕒 Байланыстырылған уақыт: {time}
+
+Енді Instagram-да <b>@{account}</b> аккаунтына Reels пен посттарды жіберіңіз — видео мен ән атауын осында жіберемін.`,
   igReelQueued: `⏳ Reels қабылданды, өңделуде...`,
   igNotDownloadable: `😕 Instagram бұл Reels-тің видео файлын бермеді — бұл Instagram тарапындағы шектеу.
 
@@ -186,9 +190,16 @@ Instagram-да @{account} аккаунтына Reels бөлісіңіз.
   igNotLinked: `❗️ Сіз әлі Telegram ботына байланыстырылмағансыз.
 
 Telegram-да ботымызды ашып, /start басыңыз — ол LINK-XXXXXX түріндегі код береді. Сол кодты осында жіберіңіз, содан кейін Reels жібере аласыз.`,
-  igLinkSuccess: `✅ Байланыстырылды!
+  igLinkSuccess: `🔗 Ботпен байланыс орнатылды!
 
-Енді кез келген Reels-ті осында бөлісіңіз — видео мен ән атауын Telegram ботыңызға жіберемін.`,
+Енді Reels пен посттарды осында жібере аласыз — видео мен ән атауын Telegram ботыңызға жіберемін.`,
+  igFollowFirst: `👋 Бір қадам қалды: алдымен @{account} аккаунтына жазылыңыз.
+
+instagram.com/{account} ашып, «Жазылу» басыңыз, содан кейін төмендегі «✅ Жазылдым» түймесін басыңыз — аккаунтыңызды байланыстырамын.`,
+  igFollowNotYet: `🙁 Жазылымыңыз әлі көрінбейді.
+
+@{account} аккаунтына жазылып (instagram.com/{account}), «✅ Жазылдым» түймесін қайта басыңыз.`,
+  igFollowButton: `✅ Жазылдым`,
   igCodeNotFound: `❌ Мұндай код табылмады немесе ол бұрын пайдаланылған.
 
 Жаңа код алу үшін Telegram ботында /start басыңыз.`,

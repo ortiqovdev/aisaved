@@ -78,6 +78,7 @@ In any chat, type <code>@{bot} link</code> to send the video without leaving it.
   notRegistered: `You're not registered yet. Tap /start.`,
   statusLinked: `🔗 Status: <b>linked</b> ✅`,
   statusLinkedAt: `📅 Linked on: {date}`,
+  statusIgAccount: `📸 Instagram: {igUser}`,
   statusNotLinked: `🔗 Status: <b>not linked</b> ⏳`,
   statusYourCode: `🔑 Your code: <code>{code}</code>`,
   statusSendCodeTo: `Send it to @{account} in an Instagram DM.`,
@@ -174,7 +175,10 @@ Help: /help · Status: /status · Language: /language`,
   // ---------- Instagram oqimi (Telegram'ga) ----------
   igLinkedTelegram: `✅ <b>Your Instagram account is linked!</b>
 
-Now share Reels to <b>@{account}</b> on Instagram — I'll send the video and the song name here.`,
+👤 Account: {igUser}
+🕒 Linked at: {time}
+
+Now share Reels and posts to <b>@{account}</b> on Instagram — I'll send the video and the song name here.`,
   igReelQueued: `⏳ Reel received, processing...`,
   igNotDownloadable: `😕 Instagram didn't provide the video file for this Reel — this is an Instagram limitation.
 
@@ -199,9 +203,16 @@ For now, save the video and send it here — I'll find the song right away.`,
   igNotLinked: `❗️ You're not linked to the Telegram bot yet.
 
 Open our bot in Telegram and tap /start — it will give you a code like LINK-XXXXXX. Send that code here, and then you can share Reels.`,
-  igLinkSuccess: `✅ Linked!
+  igLinkSuccess: `🔗 Connected to the bot!
 
-Now just share any Reel here — I'll send the video and the song name to your Telegram bot.`,
+You can now send Reels and posts here — I'll deliver the video and the song name to your Telegram bot.`,
+  igFollowFirst: `👋 One step left: follow @{account} first.
+
+Open instagram.com/{account}, tap "Follow", then press "✅ I followed" below — and I'll link your account.`,
+  igFollowNotYet: `🙁 I don't see your follow yet.
+
+Follow @{account} (instagram.com/{account}) and press "✅ I followed" again.`,
+  igFollowButton: `✅ I followed`,
   igCodeNotFound: `❌ This code wasn't found or has already been used.
 
 Tap /start in the Telegram bot to get a new code.`,

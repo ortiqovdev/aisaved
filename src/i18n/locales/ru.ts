@@ -70,6 +70,7 @@ export const ru: Messages = {
   notRegistered: `Вы ещё не зарегистрированы. Нажмите /start.`,
   statusLinked: `🔗 Статус: <b>привязан</b> ✅`,
   statusLinkedAt: `📅 Дата привязки: {date}`,
+  statusIgAccount: `📸 Instagram: {igUser}`,
   statusNotLinked: `🔗 Статус: <b>не привязан</b> ⏳`,
   statusYourCode: `🔑 Ваш код: <code>{code}</code>`,
   statusSendCodeTo: `Отправьте его @{account} в директ Instagram.`,
@@ -163,7 +164,10 @@ export const ru: Messages = {
 
   igLinkedTelegram: `✅ <b>Ваш Instagram привязан!</b>
 
-Теперь делитесь Reels с <b>@{account}</b> в Instagram — видео и название песни я пришлю сюда.`,
+👤 Аккаунт: {igUser}
+🕒 Время привязки: {time}
+
+Теперь отправляйте Reels и посты <b>@{account}</b> в Instagram — видео и название песни я пришлю сюда.`,
   igReelQueued: `⏳ Reels получен, обрабатываю...`,
   igNotDownloadable: `😕 Instagram не отдал видеофайл этого Reels — это ограничение Instagram.
 
@@ -186,9 +190,16 @@ export const ru: Messages = {
   igNotLinked: `❗️ Вы ещё не привязаны к Telegram-боту.
 
 Откройте наш бот в Telegram и нажмите /start — он даст код вида LINK-XXXXXX. Отправьте этот код сюда, и можно будет присылать Reels.`,
-  igLinkSuccess: `✅ Привязано!
+  igLinkSuccess: `🔗 Связь с ботом установлена!
 
-Теперь просто делитесь Reels здесь — видео и название песни придут в ваш Telegram-бот.`,
+Теперь можете отправлять сюда Reels и посты — видео и название песни придут в ваш Telegram-бот.`,
+  igFollowFirst: `👋 Остался один шаг: сначала подпишитесь на @{account}.
+
+Откройте instagram.com/{account}, нажмите «Подписаться», затем кнопку «✅ Я подписался» ниже — и я привяжу ваш аккаунт.`,
+  igFollowNotYet: `🙁 Пока не вижу вашей подписки.
+
+Подпишитесь на @{account} (instagram.com/{account}) и снова нажмите «✅ Я подписался».`,
+  igFollowButton: `✅ Я подписался`,
   igCodeNotFound: `❌ Такой код не найден или уже использован.
 
 Нажмите /start в Telegram-боте, чтобы получить новый код.`,

@@ -69,6 +69,14 @@ $port = 3000
 $portLine = Select-String -Path '.env' -Pattern '^\s*PORT\s*=\s*(\d+)' | Select-Object -First 1
 if ($portLine) { $port = [int]$portLine.Matches[0].Groups[1].Value }
 
+# Bot allaqachon ishlayaptimi - ikkinchi nusxa EADDRINUSE bilan yiqiladi,
+# tunnel esa ishlamaydigan serverga URL berib qo'yadi
+$busy = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($busy) {
+  $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$($busy.OwningProcess)" -ErrorAction SilentlyContinue
+  Fail "$port-port band (PID $($busy.OwningProcess): $($owner.CommandLine)). Bot boshqa oynada ishlayotgan bo'lishi mumkin - uni to'xtating: Stop-Process -Id $($busy.OwningProcess)"
+}
+
 Remove-Item 'tunnel.log', 'tunnel.out.log' -ErrorAction SilentlyContinue
 $tunnel = Start-Process -FilePath $cf -ArgumentList @('tunnel', '--no-autoupdate', '--url', "http://127.0.0.1:$port") `
   -RedirectStandardError 'tunnel.log' -RedirectStandardOutput 'tunnel.out.log' -WindowStyle Hidden -PassThru

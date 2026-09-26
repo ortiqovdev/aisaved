@@ -10,6 +10,25 @@ import { logger } from '../lib/logger.ts';
 import { PermanentError, TransientError, errMessage, fetchWithTimeout } from '../lib/errors.ts';
 import { msg } from '../i18n/index.ts';
 
+const isRemote = (input: string): boolean => /^https?:\/\//i.test(input);
+
+/**
+ * ffmpeg kirishi URL bo'lsa: uzilishda qayta ulanish va osilib qolmaslik.
+ * (Faylni to'liq yuklamasdan, faqat kerakli qismini Range so'rovlari bilan o'qiydi.)
+ */
+const remoteInputArgs = (input: string): string[] =>
+  isRemote(input)
+    ? ['-reconnect', '1', '-reconnect_on_network_error', '1', '-reconnect_delay_max', '2', '-rw_timeout', '15000000']
+    : [];
+
+/**
+ * Telegram fayl URL'ida bot tokeni bor — ffmpeg xatolari (stderr) va loglarga
+ * u ochiq holda tushmasligi kerak.
+ */
+export function redactSecrets(text: string): string {
+  return env.TELEGRAM_BOT_TOKEN ? text.replaceAll(env.TELEGRAM_BOT_TOKEN, '<token>') : text;
+}
+
 export async function ensureTmpDir(): Promise<string> {
   await fsp.mkdir(env.TMP_DIR, { recursive: true });
   return env.TMP_DIR;
@@ -298,6 +317,8 @@ function extensionFor(contentType: string | null): string {
  * ffprobe alohida dastur va har doim mavjud bo'lmasligi mumkin, shuning uchun
  * ffmpeg'ning o'zidan foydalanamiz: kirish faylini ochganda "Duration: ..."
  * satrini stderr'ga chiqaradi. null — aniqlab bo'lmadi.
+ *
+ * @param filePath — lokal fayl yoki URL (URL'da faqat sarlavha qismi o'qiladi)
  */
 export async function probeDurationSeconds(filePath: string): Promise<number | null> {
   if (!env.USE_FFMPEG) return null;
@@ -306,7 +327,7 @@ export async function probeDurationSeconds(filePath: string): Promise<number | n
     // bizga faqat metadata satri kerak, shuning uchun allowFailure.
     const { stderr } = await runCommand(
       env.FFMPEG_PATH,
-      ['-hide_banner', '-i', filePath],
+      ['-hide_banner', ...remoteInputArgs(filePath), '-i', filePath],
       20_000,
       { allowFailure: true },
     );
@@ -392,6 +413,10 @@ export const SILENCE_THRESHOLD_DB = -60;
  * ffmpeg bo'lsa videodan qisqa audio parcha ajratadi (mp3).
  * Musiqa aniqlash uchun butun video kerak emas — bu ancha tez va arzon.
  * ffmpeg topilmasa null qaytaradi, chaqiruvchi videoning o'zini yuboradi.
+ *
+ * @param videoPath — lokal fayl yoki URL. URL'da ffmpeg faylni to'liq
+ *   yuklamaydi: `-ss` kirish oldida — faqat kerakli qism Range bilan o'qiladi
+ *   (Telegram serveridan 3 MB videoni to'liq yuklash 48 s, parcha — ~3 s).
  */
 export async function extractAudioSnippet(
   videoPath: string,
@@ -402,14 +427,17 @@ export async function extractAudioSnippet(
 
   // Har qanday kengaytmani (.mp4/.mov/.webm) olib tashlaymiz.
   // Offset nomga kiritiladi — ketma-ket parchalar bir-birini yozib ketmasin.
-  const audioPath = path.join(
-    path.dirname(videoPath),
-    `${path.basename(videoPath, path.extname(videoPath))}-s${startSeconds}.mp3`,
-  );
+  const audioPath = isRemote(videoPath)
+    ? path.join(await ensureTmpDir(), `snippet-${randomUUID().slice(0, 8)}-s${startSeconds}.mp3`)
+    : path.join(
+        path.dirname(videoPath),
+        `${path.basename(videoPath, path.extname(videoPath))}-s${startSeconds}.mp3`,
+      );
   const args = [
     '-hide_banner',
     '-loglevel', 'error',
     '-y',
+    ...remoteInputArgs(videoPath),
     '-ss', String(startSeconds),
     '-t', String(durationSeconds),
     '-i', videoPath,
@@ -563,7 +591,7 @@ export function runCommand(
       if (code === 0 || options.allowFailure) settle(() => resolve({ stdout, stderr }));
       else {
         settle(() =>
-          reject(new Error(`${cmd} kod ${code} bilan tugadi: ${stderr.slice(0, 300)}`)),
+          reject(new Error(`${cmd} kod ${code} bilan tugadi: ${redactSecrets(stderr.slice(0, 300))}`)),
         );
       }
     });

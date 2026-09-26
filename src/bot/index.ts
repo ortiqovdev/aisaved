@@ -3,7 +3,7 @@ import { sequentialize } from '@grammyjs/runner';
 import type { Message } from 'grammy/types';
 import { getTrack } from '../services/deezer.ts';
 import { downloadMedia, safeUnlink } from '../services/media.ts';
-import { isResolverConfigured } from '../services/ig-resolver.ts';
+import { canResolveInstagram } from '../services/ig-resolver.ts';
 import {
   LINK_MEDIA_TYPES,
   linkFromStartPayload,
@@ -37,7 +37,6 @@ import {
   DEFAULT_LANG,
   LANGS,
   LANG_LABELS,
-  LANG_LOCALES,
   isLang,
   t,
   type Lang,
@@ -69,9 +68,12 @@ import {
   IG_PROFILE_URL,
   alreadyLinked,
   escapeHtml,
+  formatDate,
   helpText,
+  igAccountLabel,
   linkInstructions,
 } from './messages.ts';
+import { getInstagramProfile } from '../services/instagram.ts';
 
 /** Har bir update'da foydalanuvchi tili va tarjima funksiyasi tayyor turadi. */
 export type BotContext = Context & {
@@ -170,6 +172,13 @@ bot.command('status', async (ctx) => {
   const lines: string[] = [];
   if (user.link_status === 'linked') {
     lines.push(ctx.t('statusLinked'));
+    if (user.ig_scoped_id) {
+      // Username bazada saqlanmaydi — foydalanuvchi uni o'zgartirishi mumkin
+      const profile = await getInstagramProfile(user.ig_scoped_id);
+      if (profile.username || profile.name) {
+        lines.push(ctx.t('statusIgAccount', { igUser: igAccountLabel(profile.username, profile.name) }));
+      }
+    }
     if (user.linked_at) {
       lines.push(ctx.t('statusLinkedAt', { date: escapeHtml(formatDate(user.linked_at, ctx.lang)) }));
     }
@@ -197,7 +206,7 @@ bot.command('status', async (ctx) => {
     }
   }
 
-  await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+  await ctx.reply(lines.join('\n'), { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
 });
 
 bot.command('unlink', async (ctx) => {
@@ -462,8 +471,9 @@ async function handleMediaLink(ctx: BotContext, link: MediaLink): Promise<void> 
   const message = ctx.message;
   if (!from || !chat || !message) return;
 
-  // Instagram resolver ulanmagan bo'lsa navbatni behuda band qilmaymiz
-  if (link.platform === 'instagram' && !isResolverConfigured()) {
+  // Instagram havolasini ochadigan hech narsa (resolver ham, yt-dlp ham) yo'q
+  // bo'lsa navbatni behuda band qilmaymiz
+  if (link.platform === 'instagram' && !canResolveInstagram()) {
     if (chat.type === 'private') await ctx.reply(ctx.t('linkDisabled'));
     return;
   }
@@ -719,8 +729,3 @@ export async function setupBotCommands(): Promise<void> {
   for (const lang of LANGS) await sync(lang, lang);
 }
 
-function formatDate(iso: string, lang: Lang): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(LANG_LOCALES[lang], { dateStyle: 'short', timeStyle: 'short' });
-}

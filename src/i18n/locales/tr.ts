@@ -70,6 +70,7 @@ Herhangi bir sohbette <code>@{bot} bağlantı</code> yazın — videoyu sohbette
   notRegistered: `Henüz kayıtlı değilsin. /start'a dokun.`,
   statusLinked: `🔗 Durum: <b>bağlı</b> ✅`,
   statusLinkedAt: `📅 Bağlanma tarihi: {date}`,
+  statusIgAccount: `📸 Instagram: {igUser}`,
   statusNotLinked: `🔗 Durum: <b>bağlı değil</b> ⏳`,
   statusYourCode: `🔑 Kodun: <code>{code}</code>`,
   statusSendCodeTo: `Instagram'da @{account} hesabına DM olarak gönder.`,
@@ -163,7 +164,10 @@ Yardım: /help · Durum: /status · Dil: /language`,
 
   igLinkedTelegram: `✅ <b>Instagram hesabın bağlandı!</b>
 
-Artık Instagram'da <b>@{account}</b> hesabına Reels gönder — videoyu ve şarkı adını buraya gönderirim.`,
+👤 Hesap: {igUser}
+🕒 Bağlanma zamanı: {time}
+
+Artık Instagram'da <b>@{account}</b> hesabına Reels ve gönderiler gönder — videoyu ve şarkı adını buraya gönderirim.`,
   igReelQueued: `⏳ Reels alındı, işleniyor...`,
   igNotDownloadable: `😕 Instagram bu Reels'in video dosyasını vermedi — bu Instagram tarafındaki bir kısıtlama.
 
@@ -186,9 +190,16 @@ Artık Instagram'da <b>@{account}</b> hesabına Reels gönder — videoyu ve şa
   igNotLinked: `❗️ Henüz Telegram botuna bağlı değilsin.
 
 Telegram'da botumuzu açıp /start'a dokun — sana LINK-XXXXXX biçiminde bir kod verecek. O kodu buraya gönder, ardından Reels paylaşabilirsin.`,
-  igLinkSuccess: `✅ Bağlandı!
+  igLinkSuccess: `🔗 Bot ile bağlantı kuruldu!
 
-Artık beğendiğin Reels'i buraya gönder — videoyu ve şarkı adını Telegram botuna gönderirim.`,
+Artık Reels ve gönderileri buraya gönderebilirsin — videoyu ve şarkı adını Telegram botuna gönderirim.`,
+  igFollowFirst: `👋 Bir adım kaldı: önce @{account} hesabını takip et.
+
+instagram.com/{account} adresini aç, "Takip et"e dokun, sonra aşağıdaki "✅ Takip ettim" düğmesine bas — hesabını bağlayayım.`,
+  igFollowNotYet: `🙁 Takibini henüz göremiyorum.
+
+@{account} hesabını takip et (instagram.com/{account}) ve "✅ Takip ettim" düğmesine tekrar bas.`,
+  igFollowButton: `✅ Takip ettim`,
   igCodeNotFound: `❌ Bu kod bulunamadı ya da daha önce kullanılmış.
 
 Yeni kod almak için Telegram botunda /start'a dokun.`,

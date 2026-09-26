@@ -1,5 +1,5 @@
 import { env } from '../config/env.ts';
-import { t, type Lang, type MsgKey } from '../i18n/index.ts';
+import { LANG_LOCALES, t, type Lang, type MsgKey } from '../i18n/index.ts';
 import { getBotInfo } from './info.ts';
 
 /**
@@ -14,6 +14,24 @@ export function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Sana va vaqt — foydalanuvchi tilida, BOT_TIMEZONE mintaqasida. */
+export function formatDate(iso: string, lang: Lang): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(LANG_LOCALES[lang], {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: env.BOT_TIMEZONE,
+  });
+}
+
+/** Instagram akkaunt: "@username (Ism)" — HTML'da xavfsiz. */
+export function igAccountLabel(username: string | null, name: string | null): string {
+  if (!username) return name ? escapeHtml(name) : '—';
+  const at = `<a href="https://instagram.com/${encodeURIComponent(username)}">@${escapeHtml(username)}</a>`;
+  return name && name !== username ? `${at} (${escapeHtml(name)})` : at;
 }
 
 export const IG_PROFILE_URL = `https://ig.me/m/${env.IG_ACCOUNT_USERNAME}`;

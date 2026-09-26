@@ -213,6 +213,8 @@ Docker bilan:
 docker compose up -d --build
 ```
 
+Serverga (VPS) doimiy HTTPS manzil bilan joylash — bosqichma-bosqich: [`VPS.md`](VPS.md).
+
 Tekshirish:
 
 ```bash

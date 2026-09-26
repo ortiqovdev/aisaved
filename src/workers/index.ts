@@ -18,7 +18,18 @@ import {
 import { msg, t } from '../i18n/index.ts';
 import { langOfUser } from '../i18n/user-lang.ts';
 import { processRequest, reactOnInstagram, targetChatOf } from './processor.ts';
-import { idle } from './wake.ts';
+import { idle, wakeWorkers } from './wake.ts';
+
+/**
+ * Bo'sh navbatni faqat 0-slot tez-tez (WORKER_POLL_INTERVAL_MS) tekshiradi,
+ * qolganlari — shu oraliqda (zaxira: uyg'otish yetib kelmagan holatlar uchun).
+ *
+ * Ilgari 8 ta slotning har biri 3 s da bir marta so'rardi: foydalanuvchi
+ * bo'lmasa ham sutkasiga ~230 000 ta Supabase so'rovi (bepul tarifdagi 5 GB
+ * trafikni yeydi). Endi ~40 000. Yangi job kutmaydi: bot/webhook worker'ni
+ * `wakeWorkers()` bilan darhol uyg'otadi, job olgan slot esa keyingisini.
+ */
+const IDLE_POLL_MS = 60_000;
 
 const WORKER_ID = `${os.hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
 
@@ -73,10 +84,12 @@ async function loop(slot: number): Promise<void> {
 
     if (!job) {
       // Yangi job qo'shilsa bot `wakeWorkers()` bilan darhol uyg'otadi
-      await idle(env.WORKER_POLL_INTERVAL_MS);
+      await idle(slot === 0 ? env.WORKER_POLL_INTERVAL_MS : Math.max(IDLE_POLL_MS, env.WORKER_POLL_INTERVAL_MS));
       continue;
     }
 
+    // Navbatda yana job bo'lishi mumkin — uxlab yotgan keyingi slot tekshirsin
+    wakeWorkers();
     activeJobs += 1;
     try {
       await processRequest(job);
@@ -137,12 +150,16 @@ async function notifyUserOfFailure(job: RequestRow, e: unknown): Promise<void> {
       // "Qabul qilindi" kartasi bo'lsa — yangi xabar emas, kartaning matni xatoga almashadi
       await showFailure(targetChatOf(job, user.telegram_id), text, await statusCardOf(job.id));
       forgetStatusCard(job.id);
-      // Instagram'dan kelgan bo'lsa — reelsga ❌ va sababi Instagram chatiga ham
-      // (foydalanuvchi reelsni o'sha yerda yuborgan — xatoni o'sha yerda ko'rsin)
-      await reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.fail);
-      if (instagramMessageIdOf(job.ig_message_id) && user.ig_scoped_id) {
-        await trySendInstagramText(user.ig_scoped_id, toPlainText(text));
-      }
+      // Instagram'dan kelgan bo'lsa — reelsga ❌. Sababi yuqorida Telegram'ga
+      // ketdi; Instagram chati matn bilan to'lmasin — matn faqat ❌ qo'yib
+      // bo'lmasa (aks holda foydalanuvchi Instagram'da hech narsa ko'rmasdi)
+      // Fonda: qayta urinishlar ~1 daqiqa worker slotini ushlab turmasin
+      const igsid = user.ig_scoped_id;
+      void reactOnInstagram(job, igsid, IG_REACTION.fail).then(async (reacted) => {
+        if (!reacted && instagramMessageIdOf(job.ig_message_id) && igsid) {
+          await trySendInstagramText(igsid, toPlainText(text));
+        }
+      });
     }
   } catch (dbErr) {
     logger.warn({ err: errMessage(dbErr) }, 'Xato haqida xabar berib bo\'lmadi');

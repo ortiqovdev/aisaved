@@ -47,6 +47,15 @@ export function isResolverConfigured(): boolean {
   return env.IG_RESOLVER_URL.trim() !== '';
 }
 
+/**
+ * Instagram havolasidan video olsa bo'ladimi: tashqi resolver yoki yt-dlp
+ * (resolvers.ts). Inline rejim uchun esa faqat resolver yaraydi — yt-dlp
+ * havola emas, fayl beradi.
+ */
+export function canResolveInstagram(): boolean {
+  return isResolverConfigured() || env.YTDLP_PATH.trim() !== '';
+}
+
 // ---------------------------------------------------------------------------
 // Havolani tanish va normallashtirish
 // ---------------------------------------------------------------------------

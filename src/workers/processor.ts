@@ -87,7 +87,7 @@ export async function processRequest(job: RequestRow): Promise<void> {
       song_album: job.song_album,
       song_link: job.song_link,
     });
-    await reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.ok);
+    void reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.ok);
     return;
   }
 
@@ -125,17 +125,16 @@ export async function processRequest(job: RequestRow): Promise<void> {
     }
     forgetStatusCard(job.id);
 
-    // 4) Instagram'dan kelgan bo'lsa — reelsga ✅ (⌛ o'rniga) va bazada
-    //    "yuborildi + tugadi" — ikkalasi birga: ✅ bazani kutib qolmasin
-    await Promise.all([
-      reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.ok),
-      requestsRepo.markDelivered(job.id, {
-        song_title: song?.title ?? null,
-        song_artist: song?.artist ?? null,
-        song_album: song?.album ?? null,
-        song_link: song?.link ?? null,
-      }),
-    ]);
+    // 4) Instagram'dan kelgan bo'lsa — reelsga ✅ (⌛ o'rniga). Kutilmaydi:
+    //    Meta xato bersa qayta urinishlar ~1 daqiqa davom etadi, worker slotini
+    //    ushlab turmasin. Bazada esa "yuborildi + tugadi".
+    void reactOnInstagram(job, user.ig_scoped_id, IG_REACTION.ok);
+    await requestsRepo.markDelivered(job.id, {
+      song_title: song?.title ?? null,
+      song_artist: song?.artist ?? null,
+      song_album: song?.album ?? null,
+      song_link: song?.link ?? null,
+    });
 
     log.info(
       { song: song?.title ?? null, totalMs: Date.now() - new Date(job.created_at).getTime() },
@@ -367,15 +366,16 @@ function telegramMessageIdOf(igMessageId: string | null): number | undefined {
 /**
  * Instagram DM orqali kelgan so'rovning xabariga reaksiya qo'yadi.
  * Telegram'dan kelgan so'rovlarda (yoki IGSID bo'lmasa) hech narsa qilmaydi.
+ * @returns false — Instagram so'rovi edi, lekin reaksiya qo'yilmadi
  */
 export async function reactOnInstagram(
   job: RequestRow,
   igScopedId: string | null,
   reaction: IgReaction,
-): Promise<void> {
+): Promise<boolean> {
   const messageId = instagramMessageIdOf(job.ig_message_id);
-  if (!messageId || !igScopedId) return;
-  await trySendInstagramReaction(igScopedId, messageId, reaction);
+  if (!messageId || !igScopedId) return true;
+  return trySendInstagramReaction(igScopedId, messageId, reaction);
 }
 
 /**
@@ -419,6 +419,13 @@ async function lookupCache(job: RequestRow, log: Logger): Promise<SongLookup | n
   };
 }
 
+/** URL'dan parcha olib bo'lmadi — faylni to'liq yuklab qayta urinish kerak. */
+class RemoteReadError extends Error {
+  constructor() {
+    super('Parchani URL\'dan olib bo\'lmadi');
+  }
+}
+
 /** file_unique_id → bajarilayotgan aniqlash (shu jarayon ichida). */
 const recognizing = new Map<string, Promise<SongInfo | null>>();
 
@@ -434,11 +441,22 @@ async function recognizeShared(job: RequestRow, log: Logger): Promise<SongInfo |
   const run = async (): Promise<SongInfo | null> => {
     const tempFiles: string[] = [];
     try {
-      // file_id → vaqtinchalik URL (~1 soat) → yuklash
+      // file_id → vaqtinchalik URL (~1 soat)
       const url = await resolveTelegramFileUrl(job.media_url);
-      const file = await downloadMedia(url, job.id, { allowAudio: true });
-      tempFiles.push(file.filePath);
-      const song = await identifyWithFallback(file.filePath, job, log, tempFiles);
+      let song: SongInfo | null;
+      try {
+        // Tez yo'l: ffmpeg faylni YUKLAMAYDI — kerakli parchalarni URL'dan
+        // (Range so'rovlari bilan) o'qiydi. Telegram serveridan to'liq yuklash
+        // bu yerdan juda sekin: 3 MB video — 48 s, parchalar esa — ~4 s.
+        song = await identifyWithFallback(url, job, log, tempFiles, { remote: true });
+      } catch (e) {
+        if (!(e instanceof RemoteReadError)) throw e;
+        // URL'dan o'qib bo'lmadi (ffmpeg o'chiq, format oqimga mos emas) — eski yo'l
+        log.info('Parchani URL\'dan olib bo\'lmadi — fayl to\'liq yuklanadi');
+        const file = await downloadMedia(url, job.id, { allowAudio: true });
+        tempFiles.push(file.filePath);
+        song = await identifyWithFallback(file.filePath, job, log, tempFiles);
+      }
       // Faqat aniq natija keshlanadi: xato bo'lsa identifyWithFallback otadi
       if (key && env.RESULT_CACHE_ENABLED) await putSongCache(key, song);
       return song;
@@ -477,19 +495,26 @@ async function identifyWithFallback(
   job: RequestRow,
   log: Logger,
   tempFiles: string[],
+  { remote = false }: { remote?: boolean } = {},
 ): Promise<SongInfo | null> {
+  // URL'dan parcha olish ffmpeg'siz ishlamaydi — darhol faylni yuklash yo'liga
+  if (remote && !env.USE_FFMPEG) throw new RemoteReadError();
+
   const snippetLen = env.AUDD_SNIPPET_SECONDS;
+  const t0 = Date.now();
   const duration = await probeDurationSeconds(mediaPath);
   const offsets = env.AUDD_MULTI_PASS ? snippetOffsets(duration, snippetLen) : [0];
-  log.debug({ duration, offsets }, 'Musiqa aniqlash rejasi');
+  log.debug({ duration, offsets, remote }, 'Musiqa aniqlash rejasi');
 
   // Ovozi bor parchalar, istiqbol tartibida (o'rta, bosh, oxir)
   const snippets: string[] = [];
   for (const offset of offsets) {
     const snippet = await extractAudioSnippet(mediaPath, offset, snippetLen);
     if (!snippet) {
+      // URL'dan birinchi parcha ham chiqmadi — chaqiruvchi faylni yuklab qayta urinadi
+      if (remote && snippets.length === 0 && offset === offsets[0]) throw new RemoteReadError();
       // ffmpeg yo'q — butun faylni bir marta yuboramiz
-      if (snippets.length === 0 && offset === offsets[0]) snippets.push(mediaPath);
+      if (!remote && snippets.length === 0 && offset === offsets[0]) snippets.push(mediaPath);
       break;
     }
     tempFiles.push(snippet);
@@ -501,6 +526,7 @@ async function identifyWithFallback(
     snippets.push(snippet);
   }
   if (snippets.length === 0) return null; // butunlay jim video
+  log.debug({ snippets: snippets.length, remote, ms: Date.now() - t0 }, 'Parchalar tayyor');
 
   let lastError: unknown = null;
   /** Shazam kamida bitta parchani xatosiz tekshirdi — "topilmadi" ishonchli. */
