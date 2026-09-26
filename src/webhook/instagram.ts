@@ -3,7 +3,7 @@ import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { errMessage } from '../lib/errors.ts';
 import * as usersRepo from '../db/users.repo.ts';
-import { mergePending, type PendingMedia } from '../db/link-tokens.repo.ts';
+import { mergePending, takePendingForIgsid, type PendingMedia } from '../db/link-tokens.repo.ts';
 import {
   IG_REACTION,
   extractVideoAttachment,
@@ -364,11 +364,11 @@ async function handleText(igScopedId: string, event: IgMessagingEvent, text: str
     'Akkaunt bog\'landi',
   );
 
+  // 🔗 — fonda: Meta reaksiyani rad etsa qayta urinishlar ~1 daqiqa davom etadi,
+  // "aloqa mavjud" xabari esa shuni kutib qolmasin (ilgari 65 s kechikkan)
+  void react(igScopedId, event, IG_REACTION.linked);
   await Promise.all([
-    // 🔗 reaksiya, keyin "aloqa mavjud" — foydalanuvchi ikkalasini ketma-ket ko'radi
-    react(igScopedId, event, IG_REACTION.linked).then(() =>
-      trySendInstagramText(igScopedId, t(userLang, 'igLinkSuccess')),
-    ),
+    trySendInstagramText(igScopedId, t(userLang, 'igLinkSuccess')),
     trySendText(
       user.telegram_id,
       t(userLang, 'igLinkedTelegram', {
@@ -379,8 +379,14 @@ async function handleText(igScopedId: string, event: IgMessagingEvent, text: str
     ),
   ]);
 
-  // Obuna kutilayotganda tashlangan reels'lar — endi yetkazamiz
-  for (const media of pendingBefore) {
+  // Bog'lanishdan oldin tashlangan reels'lar — obuna kutilgan paytdagilar va
+  // "📲 Telegram'da ulash" havolasi kalitiga yozilganlar (foydalanuvchi tugma
+  // o'rniga eski kodni yozgan bo'lsa ham yo'qolmasin); kalit yopiladi
+  const fromToken = await takePendingForIgsid(igScopedId).catch((e: unknown) => {
+    logger.warn({ err: errMessage(e), igScopedId }, 'Kalitdagi reels\'larni olib bo\'lmadi');
+    return [] as PendingMedia[];
+  });
+  for (const media of mergePending(pendingBefore, fromToken)) {
     await enqueueInstagramMedia(user, igScopedId, media, userLang).catch((e: unknown) =>
       logger.error({ err: errMessage(e), igScopedId }, 'Kutib turgan reels navbatga qo\'yilmadi'),
     );

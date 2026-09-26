@@ -126,6 +126,39 @@ export async function issueLinkToken(
 }
 
 /**
+ * IGSID boshqa yo'l bilan (eski LINK-kod) bog'langanda: faol kalitlarini
+ * yopadi va ulardagi kutib turgan media'ni qaytaradi — reels yo'qolmasin,
+ * eski havola esa keyin ishlatilib qolmasin.
+ */
+export async function takePendingForIgsid(igsid: string): Promise<PendingMedia[]> {
+  if (useMemory !== true) {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .update({ used_at: new Date().toISOString() })
+      .eq('ig_scoped_id', igsid)
+      .is('used_at', null)
+      .gt('expires_at', new Date().toISOString())
+      .select('pending');
+    if (error && isMissingTable(error)) {
+      switchToMemory(error);
+    } else if (error) {
+      throw new Error(`${TABLE} yopishda xato: ${error.message}`);
+    } else {
+      return (data ?? []).reduce<PendingMedia[]>((acc, r) => mergePending(acc, r.pending ?? []), []);
+    }
+  }
+
+  let out: PendingMedia[] = [];
+  for (const t of memory.values()) {
+    if (t.igsid === igsid && !t.used && t.expiresAt >= Date.now()) {
+      t.used = true;
+      out = mergePending(out, t.pending);
+    }
+  }
+  return out;
+}
+
+/**
  * Kalitni ishlatadi (bir marta).
  * @returns IGSID va kutib turgan media; null — kalit yo'q, eskirgan yoki ishlatilgan
  */
