@@ -200,6 +200,23 @@ export const ru: Messages = {
 
 Подпишитесь на @{account} (instagram.com/{account}) и снова нажмите «✅ Я подписался».`,
   igFollowButton: `✅ Я подписался`,
+  igConnectPrompt: `🔗 Последний шаг: подключите Telegram-бот.
+
+Нажмите кнопку ниже — откроется Telegram, нажмите там START. После этого видео из Reels, которые вы отправляете сюда, будут приходить в Telegram.`,
+  igConnectButton: `📲 Открыть Telegram`,
+  igLinkSuccessTg: `🔗 Связь с ботом установлена! Telegram: {tg}
+
+Теперь можете отправлять сюда Reels и посты — видео и название песни придут в Telegram.
+
+Это не вы? Отправьте сюда UNLINK.`,
+  igUnlinked: `🔓 Instagram отключён от Telegram-бота. Чтобы подключить снова, отправьте любое сообщение.`,
+  connectExpired: `⌛ Эта ссылка устарела или уже использована.
+
+Напишите что угодно @{account} в Instagram — я пришлю новую.`,
+  linkMovedAway: `⚠️ Ваш Instagram подключили к другому Telegram-аккаунту, поэтому здесь он отключён.
+
+Если это были не вы, отправьте UNLINK @{account} в Instagram.`,
+  unlinkedFromInstagram: `🔓 Привязка отключена из Instagram (отправлен UNLINK). Чтобы подключить снова, напишите что угодно @{account} в Instagram.`,
   igCodeNotFound: `❌ Такой код не найден или уже использован.
 
 Нажмите /start в Telegram-боте, чтобы получить новый код.`,

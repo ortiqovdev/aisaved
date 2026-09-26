@@ -108,6 +108,43 @@ export async function trySendInstagramText(
   }
 }
 
+/**
+ * Havola tugmali xabar (button template, `web_url`). Instagram shablonni
+ * qabul qilmasa — matn va oxirida havola (DM'da havola bosiladigan bo'ladi).
+ */
+export async function trySendInstagramLinkButton(
+  igScopedId: string,
+  text: string,
+  buttonTitle: string,
+  url: string,
+): Promise<void> {
+  if (env.MOCK_INSTAGRAM) {
+    logger.info({ igScopedId, text, url }, '📨 [MOCK] Instagram havola tugmasi (haqiqatda yuborilmadi)');
+    return;
+  }
+  try {
+    const res = await postMessagesApi({
+      recipient: { id: igScopedId },
+      message: {
+        attachment: {
+          type: 'template',
+          payload: {
+            template_type: 'button',
+            // Instagram limitlari: matn 640, tugma nomi 20 belgi
+            text: text.slice(0, 640),
+            buttons: [{ type: 'web_url', url, title: buttonTitle.slice(0, 20) }],
+          },
+        },
+      },
+    });
+    if (res.ok) return;
+    logger.warn({ igScopedId, status: res.status, body: res.body.slice(0, 300) }, 'Tugmali shablon o\'tmadi — oddiy havola yuboriladi');
+  } catch (e) {
+    logger.warn({ igScopedId, err: errMessage(e) }, 'Tugmali shablon yuborilmadi — oddiy havola yuboriladi');
+  }
+  await trySendInstagramText(igScopedId, `${text}\n\n👉 ${url}`);
+}
+
 export interface IgProfile {
   username: string | null;
   name: string | null;

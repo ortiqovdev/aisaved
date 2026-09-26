@@ -3,7 +3,7 @@ import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { errMessage } from '../lib/errors.ts';
 import * as usersRepo from '../db/users.repo.ts';
-import * as requestsRepo from '../db/requests.repo.ts';
+import { mergePending, type PendingMedia } from '../db/link-tokens.repo.ts';
 import {
   IG_REACTION,
   extractVideoAttachment,
@@ -20,14 +20,10 @@ import {
   type IgWebhookBody,
   type IgReaction,
 } from '../services/instagram.ts';
-import { canResolveInstagram, parseInstagramLink } from '../services/ig-resolver.ts';
-import { IG_LINK_SOURCE } from '../lib/constants.ts';
+import { enqueueInstagramMedia, offerTelegramConnect, unlinkFromInstagram } from '../services/ig-connect.ts';
 import { trySendText } from '../bot/notify.ts';
-import { rememberStatusCard, sendStatusCard } from '../bot/status-card.ts';
-import { wakeWorkers } from '../workers/wake.ts';
-import { startPreparing } from '../services/prepare.ts';
 import { escapeHtml, formatDate, igAccountLabel, unsupportedReplyKey } from '../bot/messages.ts';
-import { t } from '../i18n/index.ts';
+import { t, type Lang } from '../i18n/index.ts';
 import { langOfUser } from '../i18n/user-lang.ts';
 
 /**
@@ -202,31 +198,85 @@ async function failInInstagram(
 /** Qayta ishlab bo'lmaydigan attachment (rasm, stiker, ovozli xabar...) — ❌ (va sababi). */
 async function handleUnsupported(igScopedId: string, event: IgMessagingEvent): Promise<void> {
   const user = await usersRepo.findByIgScopedIdCached(igScopedId);
+  if (user?.link_status !== 'linked') {
+    // Bog'lanmagan — avval ulanish kerak (rasm baribir ishlanmaydi)
+    await startConnect(igScopedId, langOfUser(user), false, []);
+    return;
+  }
   const key = unsupportedReplyKey(firstAttachmentType(event));
-  await failInInstagram(igScopedId, event, t(langOfUser(user), key), {
-    alwaysText: user?.link_status !== 'linked',
-  });
+  await failInInstagram(igScopedId, event, t(langOfUser(user), key));
 }
 
-/** "✅ Obuna bo'ldim" tugmasining payload'i: `FOLLOW_CHECK:LINK-XXXXXX`. */
+/** "✅ Obuna bo'ldim" tugmasining payload'i: `FOLLOW_CHECK:` (+ kod, eski yo'lda). */
 const FOLLOW_CHECK_PREFIX = 'FOLLOW_CHECK:';
 
 /**
- * Obuna bo'lishi kutilayotgan akkauntlar: IGSID → yuborgan kodi. Foydalanuvchi
- * tugmani bosmay, "obuna bo'ldim" deb o'zi yozsa ham kod shu yerdan topiladi.
- * Xotirada: server qayta ishga tushsa, kodni qayta yuborish kifoya.
+ * Obuna bo'lishi kutilayotgan akkauntlar: IGSID → yuborgan kodi (eski yo'l)
+ * va shu paytgacha tashlagan reels'lari. Foydalanuvchi tugmani bosmay,
+ * "obuna bo'ldim" deb o'zi yozsa ham shu yerdan topiladi. Xotirada: server
+ * qayta ishga tushsa, istalgan xabar yuborish kifoya.
  */
-const awaitingFollow = new Map<string, { code: string; at: number }>();
+interface AwaitingFollow {
+  code: string | null;
+  pending: PendingMedia[];
+  at: number;
+}
+const awaitingFollow = new Map<string, AwaitingFollow>();
 const AWAITING_FOLLOW_TTL_MS = 24 * 60 * 60_000;
+/** Obuna kutilayotganda har bir reels'ga obuna so'rovi qayta yuborilmasin. */
+const FOLLOW_REASK_MS = 60_000;
 
-function awaitingCodeOf(igScopedId: string): string | null {
+function awaitingOf(igScopedId: string): AwaitingFollow | null {
   const hit = awaitingFollow.get(igScopedId);
   if (!hit) return null;
   if (Date.now() - hit.at > AWAITING_FOLLOW_TTL_MS) {
     awaitingFollow.delete(igScopedId);
     return null;
   }
-  return hit.code;
+  return hit;
+}
+
+/** Instagram event'idagi media → bog'langach yetkaziladigan yozuv. */
+const toPending = (event: IgMessagingEvent, media: ExtractedMedia): PendingMedia => ({
+  url: media.url,
+  type: media.type,
+  downloadable: media.downloadable,
+  mid: event.message?.mid ?? null,
+});
+
+/**
+ * Bog'lanmagan foydalanuvchi — kodsiz ulanish: obuna tekshiruvi, keyin
+ * "📲 Telegram'da ulash" havolasi. Shu paytgacha yuborgan reels'lari saqlanadi.
+ */
+async function startConnect(
+  igScopedId: string,
+  lang: Lang,
+  isRecheck: boolean,
+  pending: PendingMedia[],
+): Promise<void> {
+  const prev = awaitingOf(igScopedId);
+  const allPending = mergePending(prev?.pending ?? [], pending);
+
+  const profile = await getInstagramProfile(igScopedId);
+  if (profile.followsUs === false) {
+    awaitingFollow.set(igScopedId, { code: prev?.code ?? null, pending: allPending, at: Date.now() });
+    // Ketma-ket bir nechta reels — obuna so'rovi har biriga emas, bir marta
+    if (!isRecheck && prev && Date.now() - prev.at < FOLLOW_REASK_MS) return;
+    logger.info({ igScopedId, username: profile.username, isRecheck }, 'Ulanish: obuna kutilmoqda');
+    await trySendInstagramText(
+      igScopedId,
+      t(lang, isRecheck ? 'igFollowNotYet' : 'igFollowFirst', { account: env.IG_ACCOUNT_USERNAME }),
+      [{ title: t(lang, 'igFollowButton'), payload: FOLLOW_CHECK_PREFIX }],
+    );
+    return;
+  }
+  if (profile.followsUs === null) {
+    // Meta javob bermadi — foydalanuvchini shu sababli ulanmasdan qoldirmaymiz
+    logger.warn({ igScopedId }, 'Obuna holatini aniqlab bo\'lmadi — ulanishga ruxsat berildi');
+  }
+
+  awaitingFollow.delete(igScopedId);
+  await offerTelegramConnect(igScopedId, lang, allPending);
 }
 
 /**
@@ -242,29 +292,35 @@ function awaitingCodeOf(igScopedId: string): string | null {
 async function handleText(igScopedId: string, event: IgMessagingEvent, text: string): Promise<void> {
   const payload = event.message?.quick_reply?.payload ?? '';
   const fromFollowButton = payload.startsWith(FOLLOW_CHECK_PREFIX);
-  const awaitingCode = awaitingCodeOf(igScopedId);
-  const code =
-    (fromFollowButton ? usersRepo.normalizeLinkCode(payload.slice(FOLLOW_CHECK_PREFIX.length)) : null) ??
+  const awaiting = awaitingOf(igScopedId);
+  // Yangi yozilgan kod (matnda yoki eski tugma payload'ida)
+  const typedCode =
     usersRepo.normalizeLinkCode(text) ??
-    awaitingCode;
-  // Kod yangi yuborilgan bo'lsa — birinchi so'rov; aks holda qayta tekshiruv
-  const isRecheck = fromFollowButton || (awaitingCode !== null && code === awaitingCode);
+    (fromFollowButton ? usersRepo.normalizeLinkCode(payload.slice(FOLLOW_CHECK_PREFIX.length)) : null);
+  const code = typedCode ?? awaiting?.code ?? null;
+  // Tugma bosildi yoki obuna kutilayotganda boshqa narsa yozildi — qayta tekshiruv
+  const isRecheck = fromFollowButton || (awaiting !== null && typedCode === null);
 
   const existing = await usersRepo.findByIgScopedId(igScopedId);
   // Qator topilishining o'zi yetarli emas — holati ham 'linked' bo'lishi kerak
   const isLinked = existing?.link_status === 'linked';
   const lang = langOfUser(existing);
 
-  if (!code) {
-    await trySendInstagramText(igScopedId, t(lang, isLinked ? 'igSendReels' : 'igNotLinked'));
+  if (isLinked && existing) {
+    awaitingFollow.delete(igScopedId);
+    // Instagram egasi begona Telegram ulanganini ko'rsa — shu yerdan uzadi
+    if (/^\s*\/?unlink\s*$/i.test(text)) {
+      await unlinkFromInstagram(existing, igScopedId, lang);
+      return;
+    }
+    // Allaqachon bog'langan akkaunt kod yuborsa, "kod topilmadi" degan chalkash javob bermaymiz
+    await trySendInstagramText(igScopedId, t(lang, typedCode ? 'igAlreadyLinked' : 'igSendReels'));
     return;
   }
 
-  // Allaqachon bog'langan akkaunt kod yuborsa, "kod topilmadi" degan
-  // chalkash javob bermaymiz.
-  if (isLinked) {
-    awaitingFollow.delete(igScopedId);
-    await trySendInstagramText(igScopedId, t(lang, 'igAlreadyLinked'));
+  if (!code) {
+    // Kodsiz ulanish: obuna → "📲 Telegram'da ulash" havolasi
+    await startConnect(igScopedId, lang, isRecheck, []);
     return;
   }
 
@@ -280,7 +336,7 @@ async function handleText(igScopedId: string, event: IgMessagingEvent, text: str
 
   const profile = await getInstagramProfile(igScopedId);
   if (profile.followsUs === false) {
-    awaitingFollow.set(igScopedId, { code, at: Date.now() });
+    awaitingFollow.set(igScopedId, { code, pending: awaiting?.pending ?? [], at: Date.now() });
     logger.info({ igScopedId, username: profile.username, isRecheck }, 'Bog\'lash: obuna kutilmoqda');
     await trySendInstagramText(
       igScopedId,
@@ -295,6 +351,7 @@ async function handleText(igScopedId: string, event: IgMessagingEvent, text: str
   }
 
   const user = await usersRepo.linkUserByCode(code, igScopedId);
+  const pendingBefore = awaiting?.pending ?? [];
   awaitingFollow.delete(igScopedId);
   if (!user) {
     logger.info({ igScopedId, code }, 'Bog\'lash kodi topilmadi');
@@ -321,13 +378,23 @@ async function handleText(igScopedId: string, event: IgMessagingEvent, text: str
       }),
     ),
   ]);
+
+  // Obuna kutilayotganda tashlangan reels'lar — endi yetkazamiz
+  for (const media of pendingBefore) {
+    await enqueueInstagramMedia(user, igScopedId, media, userLang).catch((e: unknown) =>
+      logger.error({ err: errMessage(e), igScopedId }, 'Kutib turgan reels navbatga qo\'yilmadi'),
+    );
+  }
 }
 
 /**
- * Media (reels/video) — navbatga qo'yiladi.
+ * Media (reels/video).
  *
- * Instagram'da foydalanuvchiga matn yozilmaydi: natija ham, xato sababi ham
- * Telegram'ga boradi. Instagram'dagi holat — reelsdagi reaksiya: muammo
+ * Bog'lanmagan foydalanuvchi — reels saqlanadi va kodsiz ulanish taklif
+ * qilinadi; bog'langach shu reels ham yetkaziladi.
+ *
+ * Bog'langan — navbatga. Instagram'da matn yozilmaydi: natija ham, xato sababi
+ * ham Telegram'ga boradi. Instagram'dagi holat — reelsdagi reaksiya: muammo
  * bo'lsa shu yerda ❌, hammasi joyida bo'lsa worker oxirida ✅ qo'yadi.
  */
 async function handleMedia(
@@ -338,84 +405,22 @@ async function handleMedia(
   const user = await usersRepo.findByIgScopedIdCached(igScopedId);
 
   if (!user || user.link_status !== 'linked') {
-    logger.info({ igScopedId }, 'Bog\'lanmagan foydalanuvchidan media keldi');
-    // Telegram'i hali noma'lum — qanday bog'lanishni faqat shu yerda aytish mumkin
-    await failInInstagram(igScopedId, event, t(langOfUser(user), 'igNotLinked'), { alwaysText: true });
+    logger.info({ igScopedId }, 'Bog\'lanmagan foydalanuvchidan media keldi — ulanish taklif qilinadi');
+    await startConnect(igScopedId, langOfUser(user), false, [toPending(event, media)]);
     return;
   }
   const lang = langOfUser(user);
 
-  /**
-   * Meta ba'zi reels uchun video fayl o'rniga reels SAHIFASINING havolasini
-   * yuboradi (`instagram.com/reel/XXX/`). U `text/html` qaytaradi, ya'ni
-   * to'g'ridan-to'g'ri yuklab bo'lmaydi.
-   *
-   * Bunday havolani foydalanuvchiga qaytarib "o'zingiz tashlang" deyish shart
-   * emas — bu aynan resolver hal qiladigan ish. Shuning uchun jobni HAVOLA
-   * turida navbatga qo'yamiz: worker uni yechadi, videoni yuklaydi va natija
-   * baribir Telegram'ga VIDEO bo'lib boradi — foydalanuvchi uchun farqi yo'q.
-   */
-  const link = media.downloadable ? null : parseInstagramLink(media.url);
-  const viaResolver = link !== null && canResolveInstagram();
-
-  if (!media.downloadable && !viaResolver) {
-    // Resolver ulanmagan (yoki havola tanilmadi) — bu yagona holat, bunda
-    // foydalanuvchiga ishlaydigan muqobil yo'lni ko'rsatamiz.
-    logger.warn(
-      { igScopedId, type: media.type, url: media.url, resolver: canResolveInstagram() },
-      'Meta media o\'rniga sahifa havolasini yubordi, resolver esa yo\'q',
-    );
+  const outcome = await enqueueInstagramMedia(user, igScopedId, toPending(event, media), lang);
+  if (outcome.status === 'not-downloadable') {
     await Promise.all([
       failInInstagram(igScopedId, event, t(lang, 'failInstagramSource')),
       // Telegram'da — sababi va ishlaydigan muqobil yo'l (videoni o'zi tashlashi)
       trySendText(user.telegram_id, t(lang, 'igNotDownloadable')),
     ]);
-    return;
-  }
-
-  // Resolver navbatga yozish bilan PARALLEL boshlanadi — worker jobni olganda
-  // post tayyor turadi (Supabase'ning ~1 s kechikishi yashiriladi)
-  if (link && viaResolver) startPreparing(`ig:${link.shortcode}`, 'instagram', link.url);
-
-  // Spam himoyasi + navbat — bitta so'rovda (0005). Media keshi shu yerda
-  // emas, worker'da tekshiriladi: Meta webhook'ni qayta yuborsa, dublikatni
-  // faqat navbat ushlaydi — keshdan to'g'ridan-to'g'ri yuborsak ikki marta ketardi.
-  const result = await requestsRepo.enqueueWithLimit({
-    userId: user.id,
-    igMessageId: event.message?.mid ?? null,
-    // Havola bo'lsa kanonik ko'rinishini saqlaymiz — worker uni resolver
-    // orqali yechadi; CDN havolasi bo'lsa o'zini (u darhol yuklanadi).
-    mediaUrl: link ? link.url : media.url,
-    mediaType: link ? IG_LINK_SOURCE : media.type,
-    // Shortcode doimiy — media keshi va musiqa keshining kaliti
-    ...(link ? { fileUniqueId: `ig:${link.shortcode}` } : {}),
-  });
-
-  if (result.status === 'limit') {
-    logger.info({ userId: user.id, pending: result.pending }, 'Foydalanuvchi navbat limitiga yetdi');
-    const text = t(lang, 'igPendingLimit', { n: result.pending });
+  } else if (outcome.status === 'limit') {
+    const text = t(lang, 'igPendingLimit', { n: outcome.pending });
     await Promise.all([failInInstagram(igScopedId, event, text), trySendText(user.telegram_id, text)]);
-    return;
   }
-  if (result.status === 'duplicate') return; // dublikat webhook — javob ham takrorlanmasin
-  const row = result.row;
-
-  logger.info(
-    { requestId: row.id, userId: user.id, mediaType: media.type, viaResolver },
-    'Navbatga qo\'shildi',
-  );
-
-  // Telegram'da "⏳ Reels qabul qilindi" kartasi — natija shu xabarning o'rniga
-  // chiqadi. Bu yerda karta navbatdan KEYIN: Meta webhook'ni tez-tez qayta
-  // yuboradi, dublikatga karta chiqib-o'chib bildirishnoma bermasin.
-  const statusId = await sendStatusCard(user.telegram_id, lang, 'igReelQueued');
-  if (statusId) {
-    rememberStatusCard(row.id, statusId);
-    await requestsRepo.setStatusMessageId(row.id, statusId).catch((e: unknown) =>
-      logger.debug({ err: errMessage(e) }, 'status_message_id saqlanmadi (xotirada bor)'),
-    );
-  }
-  // Karta saqlangandan KEYIN uyg'otamiz — aks holda tez worker kartani
-  // topmay natijani yangi xabar qilib yuborardi
-  wakeWorkers();
+  // queued — natija va ✅ worker'dan; duplicate — Meta webhook'ni qayta yubordi, javob takrorlanmaydi
 }

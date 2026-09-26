@@ -227,12 +227,19 @@ export async function ensureLinkCode(userId: number): Promise<UserRow> {
 export async function linkUserByCode(code: string, igScopedId: string): Promise<UserRow | null> {
   const user = await findByLinkCode(code);
   if (!user) return null;
+  return linkUserToIg(user.id, igScopedId);
+}
 
+/**
+ * Telegram foydalanuvchisiga IGSID'ni biriktiradi (kod yoki bir martalik
+ * havola orqali). Kod tozalanadi — endi kerak emas.
+ */
+export async function linkUserToIg(userId: number, igScopedId: string): Promise<UserRow> {
   // Shu IGSID boshqa akkauntga bog'langan bo'lsa — avval uni uzamiz
   const occupied = await findByIgScopedId(igScopedId);
-  if (occupied && occupied.id !== user.id) {
+  if (occupied && occupied.id !== userId) {
     logger.warn(
-      { igScopedId, oldUserId: occupied.id, newUserId: user.id },
+      { igScopedId, oldUserId: occupied.id, newUserId: userId },
       'IGSID boshqa userga bog\'langan edi — ko\'chirilmoqda',
     );
     const { error: unlinkErr } = await supabase
@@ -251,7 +258,7 @@ export async function linkUserByCode(code: string, igScopedId: string): Promise<
       linked_at: new Date().toISOString(),
       link_code: null,
     })
-    .eq('id', user.id)
+    .eq('id', userId)
     .select('*')
     .single<UserRow>();
 

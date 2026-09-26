@@ -121,6 +121,8 @@ Manba kodida importlar `.ts` kengaytmasi bilan yozilgan (`allowImportingTsExtens
    bitta so'rovda va media keshi (bir marta yuborilgan reels keyingi safar RapidAPI'siz, bir zumda).
    Va [`supabase/migrations/0006_song_cache.sql`](supabase/migrations/0006_song_cache.sql) — qo'shiq natijasi
    keshi: bitta videoni ko'p odam so'rasa ham AudD (pullik) faqat bir marta chaqiriladi.
+   Va [`supabase/migrations/0007_ig_link_tokens.sql`](supabase/migrations/0007_ig_link_tokens.sql) — bir bosishda
+   bog'lash: Instagram'da "📲 Telegram'da ulash" tugmasi, kod ko'chirish shart emas.
 4. **Project Settings → API** dan oling:
    - `Project URL` → `.env` dagi `SUPABASE_URL`
    - `service_role` **secret** kalit → `SUPABASE_SERVICE_ROLE_KEY`
@@ -354,6 +356,7 @@ supabase/migrations/0003_user_language.sql
 supabase/migrations/0004_status_message.sql
 supabase/migrations/0005_speed.sql
 supabase/migrations/0006_song_cache.sql
+supabase/migrations/0007_ig_link_tokens.sql
 ```
 
 ---

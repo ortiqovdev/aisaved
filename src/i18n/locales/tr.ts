@@ -200,6 +200,23 @@ instagram.com/{account} adresini aç, "Takip et"e dokun, sonra aşağıdaki "✅
 
 @{account} hesabını takip et (instagram.com/{account}) ve "✅ Takip ettim" düğmesine tekrar bas.`,
   igFollowButton: `✅ Takip ettim`,
+  igConnectPrompt: `🔗 Son adım: Telegram botunu bağla.
+
+Aşağıdaki düğmeye dokun — Telegram açılacak, orada START'a bas. Bundan sonra buraya gönderdiğin Reels videoları Telegram'a gelir.`,
+  igConnectButton: `📲 Telegram'ı bağla`,
+  igLinkSuccessTg: `🔗 Bot ile bağlantı kuruldu! Telegram: {tg}
+
+Artık Reels ve gönderileri buraya gönderebilirsin — videoyu ve şarkı adını Telegram'a gönderirim.
+
+Sen değil misin? Buraya UNLINK yaz.`,
+  igUnlinked: `🔓 Instagram hesabın Telegram botundan ayrıldı. Tekrar bağlamak için herhangi bir mesaj gönder.`,
+  connectExpired: `⌛ Bu bağlantının süresi doldu veya zaten kullanıldı.
+
+Instagram'da @{account} hesabına herhangi bir mesaj yaz — yenisini göndereyim.`,
+  linkMovedAway: `⚠️ Instagram hesabın başka bir Telegram hesabına bağlandı, bu yüzden buradan ayrıldı.
+
+Sen değilsen Instagram'da @{account} hesabına UNLINK yaz.`,
+  unlinkedFromInstagram: `🔓 Bağlantı Instagram'dan kaldırıldı (UNLINK gönderildi). Tekrar bağlamak için Instagram'da @{account} hesabına herhangi bir mesaj yaz.`,
   igCodeNotFound: `❌ Bu kod bulunamadı ya da daha önce kullanılmış.
 
 Yeni kod almak için Telegram botunda /start'a dokun.`,

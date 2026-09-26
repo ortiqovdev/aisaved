@@ -213,6 +213,23 @@ Open instagram.com/{account}, tap "Follow", then press "✅ I followed" below �
 
 Follow @{account} (instagram.com/{account}) and press "✅ I followed" again.`,
   igFollowButton: `✅ I followed`,
+  igConnectPrompt: `🔗 Last step: connect the Telegram bot.
+
+Tap the button below — Telegram will open, press START there. After that, videos from the Reels you send here will arrive in Telegram.`,
+  igConnectButton: `📲 Connect Telegram`,
+  igLinkSuccessTg: `🔗 Connected to the bot! Telegram: {tg}
+
+You can now send Reels and posts here — I'll deliver the video and the song name to Telegram.
+
+Not you? Send UNLINK here.`,
+  igUnlinked: `🔓 Your Instagram is disconnected from the Telegram bot. Send any message to connect again.`,
+  connectExpired: `⌛ This link has expired or was already used.
+
+Send any message to @{account} on Instagram — I'll send you a new one.`,
+  linkMovedAway: `⚠️ Your Instagram account was connected to another Telegram account, so it was disconnected here.
+
+If that wasn't you, send UNLINK to @{account} on Instagram.`,
+  unlinkedFromInstagram: `🔓 Instagram disconnected this bot (UNLINK was sent from Instagram). To connect again, send any message to @{account} on Instagram.`,
   igCodeNotFound: `❌ This code wasn't found or has already been used.
 
 Tap /start in the Telegram bot to get a new code.`,

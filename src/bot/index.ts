@@ -74,6 +74,7 @@ import {
   linkInstructions,
 } from './messages.ts';
 import { getInstagramProfile } from '../services/instagram.ts';
+import { completeTelegramConnect, connectTokenFromStart } from '../services/ig-connect.ts';
 
 /** Har bir update'da foydalanuvchi tili va tarjima funksiyasi tayyor turadi. */
 export type BotContext = Context & {
@@ -121,6 +122,13 @@ bot.command('start', async (ctx) => {
   // Guruhda /start — faqat qisqa tanishtiruv (bog'lash kodi shaxsiy narsa)
   if (ctx.chat.type !== 'private') {
     await ctx.reply(ctx.t('groupHello'));
+    return;
+  }
+
+  // Instagram'dagi "📲 Telegram'da ulash" tugmasi: /start ig_<bir martalik kalit>
+  const connectToken = connectTokenFromStart(ctx.match);
+  if (connectToken) {
+    await completeTelegramConnect(from, ctx.lang, connectToken);
     return;
   }
 

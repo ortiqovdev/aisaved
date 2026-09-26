@@ -200,6 +200,23 @@ instagram.com/{account} ni oching, "Obuna bo'lish" ni bosing, keyin pastdagi "�
 
 @{account} ga obuna bo'ling (instagram.com/{account}) va "✅ Obuna bo'ldim" ni qayta bosing.`,
   igFollowButton: `✅ Obuna bo'ldim`,
+  igConnectPrompt: `🔗 Oxirgi qadam: Telegram botni ulang.
+
+Pastdagi tugmani bosing — Telegram ochiladi, u yerda START ni bosing. Shundan keyin shu yerga yuborgan reels'laringiz videosi Telegram'ga keladi.`,
+  igConnectButton: `📲 Telegram'da ulash`,
+  igLinkSuccessTg: `🔗 Bot bilan aloqa mavjud! Telegram: {tg}
+
+Endi reels va postlarni shu yerga yuborishingiz mumkin — videoni va qo'shiq nomini Telegram'ga yuboraman.
+
+Bu siz emasmisiz? Shu yerga UNLINK deb yozing.`,
+  igUnlinked: `🔓 Instagram akkauntingiz Telegram botdan uzildi. Qayta ulash uchun istalgan xabar yuboring.`,
+  connectExpired: `⌛ Bu havola eskirgan yoki allaqachon ishlatilgan.
+
+Instagram'da @{account} ga istalgan xabar yozing — yangi havola yuboraman.`,
+  linkMovedAway: `⚠️ Instagram akkauntingiz boshqa Telegram akkauntga ulandi, shuning uchun bu yerdan uzildi.
+
+Bu siz bo'lmasangiz, Instagram'da @{account} ga UNLINK deb yozing.`,
+  unlinkedFromInstagram: `🔓 Instagram tomonidan bog'lanish uzildi (Instagram'dan UNLINK yuborildi). Qayta ulash uchun Instagram'da @{account} ga istalgan xabar yozing.`,
   igCodeNotFound: `❌ Bunday kod topilmadi yoki u allaqachon ishlatilgan.
 
 Telegram botida /start bosib yangi kod oling.`,

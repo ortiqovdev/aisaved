@@ -35,6 +35,8 @@ export async function runRetention(): Promise<void> {
     ['requests', env.REQUESTS_RETENTION_DAYS, ['done', 'failed']],
     ['media_cache', env.CACHE_RETENTION_DAYS],
     ['song_cache', env.CACHE_RETENTION_DAYS],
+    // Bir martalik bog'lash kalitlari 30 daqiqa amal qiladi — kuni o'tganlari keraksiz
+    ['ig_link_tokens', 1],
   ];
 
   for (const [table, days, statuses] of jobs) {
