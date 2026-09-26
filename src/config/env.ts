@@ -82,6 +82,22 @@ const envSchema = z.object({
   IG_RESOLVER_TITLE_PATH: z.string().default(''),
   IG_RESOLVER_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(120_000).default(45_000),
 
+  /**
+   * Instagram cookies (Netscape cookies.txt) — yt-dlp login'siz emas, shu
+   * akkaunt nomidan so'raydi. Server (data-markaz) IP'laridan Instagram
+   * login'siz so'rovlarni tezda bloklaydi ("rate-limit ... login page").
+   * ASOSIY akkauntni ishlatmang — alohida akkaunt oching. Yo'riqnoma: RENDER.md.
+   *
+   * IG_COOKIES_FILE — fayl yo'li (sukut: Render Secret File
+   *   /etc/secrets/instagram_cookies.txt, bo'lsa);
+   * IG_COOKIES — fayl mazmunining o'zi (yoki base64) — Secret File bo'lmasa.
+   */
+  IG_COOKIES_FILE: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim() || '/etc/secrets/instagram_cookies.txt'),
+  IG_COOKIES: z.string().default(''),
+
   // Boshqa platformalar (src/services/resolvers.ts)
   /**
    * TikTok: tikwm-mos API (`{url}` — havola). Bo'sh qoldirilsa TikTok o'chiq.

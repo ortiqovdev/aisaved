@@ -7,6 +7,7 @@ import { PermanentError, TransientError, errMessage, fetchWithTimeout } from '..
 import { msg } from '../i18n/index.ts';
 import { isResolverConfigured, resolveInstagramMedia, type ResolvedItem } from './ig-resolver.ts';
 import { ensureTmpDir, runCommand, safeUnlink, type DownloadedFile } from './media.ts';
+import { hasInstagramCookies, instagramCookieArgs } from './ig-cookies.ts';
 import type { Platform } from './links.ts';
 
 /**
@@ -234,12 +235,14 @@ const resolveYouTube = (link: string, jobId: number): Promise<ResolvedPost> =>
  * Reels faqat alohida video+ovoz (DASH) ko'rinishida bo'lsa — yuklab birlashtiramiz.
  */
 export async function resolveInstagramWithYtDlp(link: string, jobId: number): Promise<ResolvedPost> {
-  const direct = await instagramDirectUrl(link);
+  const cookieArgs = await instagramCookieArgs();
+  const direct = await instagramDirectUrl(link, cookieArgs);
   if (direct) return { items: [{ url: direct.url, kind: 'video', thumb: direct.thumb }] };
   return downloadWithYtDlp(link, jobId, {
     label: 'Instagram',
     prefix: 'ig',
     format: 'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
+    extraArgs: cookieArgs,
   });
 }
 
@@ -248,10 +251,14 @@ export async function resolveInstagramWithYtDlp(link: string, jobId: number): Pr
  * @returns null — bunday format yo'q (faqat alohida video+ovoz)
  * @throws  post yopiq/o'chirilgan, video yo'q, Instagram chekladi va h.k.
  */
-async function instagramDirectUrl(link: string): Promise<{ url: string; thumb: string | null } | null> {
+async function instagramDirectUrl(
+  link: string,
+  cookieArgs: string[],
+): Promise<{ url: string; thumb: string | null } | null> {
   const { stdout, stderr } = await runYtDlp(
     [
       '--no-warnings', '--no-playlist',
+      ...cookieArgs,
       // `b` — ovozi ham, videosi ham bor bitta fayl
       '-f', 'b[ext=mp4]',
       '--print', '%(.{url,thumbnail})j',
@@ -311,7 +318,12 @@ function ytDlpFailure(label: string, out: string): Error {
   // ichida qayta urinish foyda bermaydi — foydalanuvchi "loading"da kutib
   // qolmasin, darhol javob olsin. Doimiy yechim: cookies yoki IG_RESOLVER_URL.
   if (/rate-limit|redirected to the login page/i.test(out)) {
-    logger.error({ label }, 'Instagram bu serverdan login\'siz so\'rovlarni blokladi (rate-limit)');
+    logger.error(
+      { label, cookies: hasInstagramCookies() },
+      hasInstagramCookies()
+        ? 'Instagram cookies bilan ham blokladi — cookies eskirgan yoki akkaunt cheklangan: yangi cookies eksport qiling'
+        : 'Instagram bu serverdan login\'siz so\'rovlarni blokladi (rate-limit) — IG cookies qo\'shing (RENDER.md)',
+    );
     return new PermanentError(`${label}: Instagram rate-limit (login talab qilinadi)`, msg('errResolverCantFetch'));
   }
   // "empty media response" — Instagram: post o'chirilgan, yopiq yoki login talab qiladi
@@ -329,6 +341,8 @@ interface YtDlpOptions {
   format: string;
   /** Shundan uzun videolar yuklanmaydi (sekund); berilmasa — cheklovsiz. */
   maxSeconds?: number;
+  /** Qo'shimcha yt-dlp argumentlari (masalan Instagram cookies). */
+  extraArgs?: string[];
 }
 
 async function downloadWithYtDlp(link: string, jobId: number, opts: YtDlpOptions): Promise<ResolvedPost> {
@@ -353,6 +367,7 @@ async function downloadWithYtDlp(link: string, jobId: number, opts: YtDlpOptions
     '--merge-output-format', 'mp4',
     '--max-filesize', `${maxMb}M`,
     ...(opts.maxSeconds ? ['--match-filter', `duration<=?${opts.maxSeconds}`] : []),
+    ...(opts.extraArgs ?? []),
     '-o', `${base}.%(ext)s`,
     link,
   ];

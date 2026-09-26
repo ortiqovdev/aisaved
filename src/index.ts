@@ -16,6 +16,7 @@ import { devMockRouter } from './webhook/dev-mock.ts';
 import { startWorkers, stopWorkers, workerStatus } from './workers/index.ts';
 import { cleanupTmpDir, ensureTmpDir, startTmpCleanup, stopTmpCleanup } from './services/media.ts';
 import { startRetention, stopRetention } from './db/retention.ts';
+import { instagramCookieArgs } from './services/ig-cookies.ts';
 
 /** docs/ — loyiha ildizida; src/index.ts (dev) va dist/index.js (build) dan bir xil masofa. */
 const DOCS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -247,6 +248,10 @@ async function main(): Promise<void> {
   startWorkers();
   startRetention();
   startKeepAlive();
+  // Instagram cookies holati logda darhol ko'rinsin (bor/yo'q/yaroqsiz)
+  void instagramCookieArgs().catch((e: unknown) =>
+    logger.warn({ err: errMessage(e) }, 'Instagram cookies faylini tayyorlab bo\'lmadi'),
+  );
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'To\'xtatilmoqda...');

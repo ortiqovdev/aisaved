@@ -84,6 +84,47 @@ Render panelidagi manzilingiz (masalan `https://aisaved-bot.onrender.com`):
 
 Bu manzil **o'zgarmaydi**.
 
+## 6b. Instagram cookies (majburiy)
+
+Instagram server IP'laridan **login'siz** so'rovlarni bloklaydi — logda
+`You have exceeded the rate-limit for accessing posts anonymously`. Yechim:
+bot reels'ni alohida Instagram akkaunt nomidan oladi.
+
+> ⚠️ **Asosiy akkauntingizni ishlatmang.** Instagram avtomatlashtirilgan
+> so'rovlar uchun akkauntni vaqtincha cheklashi yoki bloklashi mumkin.
+> Cookies fayli — parol bilan teng: hech kimga bermang, GitHub'ga qo'ymang.
+
+1. **Yangi Instagram akkaunt oching** (alohida email bilan). Profil rasmi qo'ying,
+   bir nechta sahifaga obuna bo'ling va bir kun oddiy ishlating — "yangi, bo'sh"
+   akkaunt tezroq shubha uyg'otadi.
+2. **Chrome'da alohida profil oching** (o'ng yuqoridagi profil belgisi → *Add*) —
+   asosiy akkauntingiz cookies'i aralashmasin.
+3. Shu profilga **"Get cookies.txt LOCALLY"** kengaytmasini o'rnating
+   (Chrome Web Store). Boshqa "cookies.txt" kengaytmalarini emas — ularning
+   ba'zilari cookies'ni o'g'irlagani aniqlangan; bu kengaytma ochiq kodli va
+   faylni faqat kompyuteringizga saqlaydi.
+4. Shu profilda **instagram.com** ga yangi akkaunt bilan kiring.
+5. instagram.com sahifasida kengaytma belgisini bosing → format **Netscape** →
+   **Export** → `instagram.com_cookies.txt` fayli yuklanadi.
+6. **Akkauntdan chiqmang (Log out qilmang)** — chiqsangiz cookies bekor bo'ladi.
+   Oynani shunchaki yoping.
+7. Render → **aisaved-bot** → **Environment** → **Secret Files** →
+   **+ Add Secret File**:
+   - **Filename:** `instagram_cookies.txt`
+   - **Contents:** faylni Notepad'da oching, hammasini nusxalab qo'ying
+8. **Save changes** → servis qayta ishga tushadi. Logda:
+   `Instagram cookies yuklandi (akkauntga kirilgan)`.
+
+| Logdagi xabar | Ma'nosi |
+|---|---|
+| `cookies yuklandi (akkauntga kirilgan)` | ✅ Hammasi joyida |
+| `"sessionid" yo'q` | Akkauntga kirmasdan eksport qilingan — 4–5-qadamni qaytaring |
+| `Netscape formatida emas` | Noto'g'ri fayl yoki format — 5-qadamda **Netscape** ni tanlang |
+| `cookies bilan ham blokladi` | Cookies eskirgan yoki akkaunt cheklangan — yangidan eksport qiling |
+
+Instagram yangi akkauntga "Germaniyadan kirish urinishi" haqida xabar
+yuborishi mumkin — telefonda o'sha akkauntni ochib, **"Bu men edim"** ni bosing.
+
 ## 7. Tekshirish
 
 - [ ] `https://aisaved-bot.onrender.com/health` → `"ok":true`
