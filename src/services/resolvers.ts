@@ -255,9 +255,12 @@ async function instagramDirectUrl(link: string): Promise<{ url: string; thumb: s
       // `b` — ovozi ham, videosi ham bor bitta fayl
       '-f', 'b[ext=mp4]',
       '--print', '%(.{url,thumbnail})j',
+      // Instagram "osilib" qolsa yt-dlp o'zi ham kutmasin
+      '--socket-timeout', '15',
       link,
     ],
-    60_000,
+    // Odatda ~4–5 s; Instagram javob bermasa — tezroq voz kechib, qayta urinamiz
+    30_000,
   );
 
   const line = stdout.split('\n').find((l) => l.trimStart().startsWith('{'));
@@ -303,6 +306,13 @@ function ytDlpFailure(label: string, out: string): Error {
   // Instagram: rasm yoki faqat rasmlardan iborat karusel — yt-dlp faqat video oladi
   if (/no video formats found|there is no video/i.test(out)) {
     return new PermanentError(`${label}: postda video yo'q`, msg('errResolverNoVideo'));
+  }
+  // Instagram server IP'sini blokladi (login'siz so'rovlar limiti). Daqiqalar
+  // ichida qayta urinish foyda bermaydi — foydalanuvchi "loading"da kutib
+  // qolmasin, darhol javob olsin. Doimiy yechim: cookies yoki IG_RESOLVER_URL.
+  if (/rate-limit|redirected to the login page/i.test(out)) {
+    logger.error({ label }, 'Instagram bu serverdan login\'siz so\'rovlarni blokladi (rate-limit)');
+    return new PermanentError(`${label}: Instagram rate-limit (login talab qilinadi)`, msg('errResolverCantFetch'));
   }
   // "empty media response" — Instagram: post o'chirilgan, yopiq yoki login talab qiladi
   if (/private|unavailable|removed|not available|sign in|login required|empty media response/i.test(out)) {
