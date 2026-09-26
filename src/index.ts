@@ -17,6 +17,9 @@ import { startWorkers, stopWorkers, workerStatus } from './workers/index.ts';
 import { cleanupTmpDir, ensureTmpDir, startTmpCleanup, stopTmpCleanup } from './services/media.ts';
 import { startRetention, stopRetention } from './db/retention.ts';
 import { instagramCookieArgs } from './services/ig-cookies.ts';
+import { alertAdminLater } from './services/alerts.ts';
+import { initIgToken, startIgTokenRefresh } from './services/ig-token.ts';
+import { startMonitoring } from './services/monitor.ts';
 
 /** docs/ — loyiha ildizida; src/index.ts (dev) va dist/index.js (build) dan bir xil masofa. */
 const DOCS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -115,6 +118,8 @@ function superviseRunner(): { stop: () => Promise<void> } {
   let current: RunnerHandle | null = null;
   let stopping = false;
   let delay = 5_000;
+  /** Ketma-ket (qisqa ishlab) yiqilishlar — deploy paytidagi bitta 409 normal. */
+  let failures = 0;
 
   const start = (): void => {
     current = run(bot);
@@ -124,8 +129,21 @@ function superviseRunner(): { stop: () => Promise<void> } {
       () => undefined,
       (e: unknown) => {
         if (stopping) return;
-        // Uzoq ishlagan bo'lsa — kechikishni boshidan boshlaymiz
-        if (Date.now() - startedAt > 60_000) delay = 5_000;
+        // Uzoq ishlagan bo'lsa — kechikishni va hisobni boshidan boshlaymiz
+        if (Date.now() - startedAt > 60_000) {
+          delay = 5_000;
+          failures = 0;
+        }
+        failures += 1;
+        if (failures >= 4) {
+          const conflict = /409|Conflict/i.test(errMessage(e));
+          alertAdminLater('tg-polling', '🔴 Telegram xabarlarni qabul qilish to\'xtab qolyapti', [
+            errMessage(e).slice(0, 200),
+            conflict
+              ? 'Bot boshqa joyda ham ishlayapti (409). Kompyuterdagi `npm run win` yoki boshqa server to\'xtatilsin.'
+              : 'Telegram API bilan aloqa uzilyapti — qayta ulanishga urinilmoqda.',
+          ]);
+        }
         logger.error(
           { err: errMessage(e), retryInMs: delay },
           'Telegram polling to\'xtadi — qayta ishga tushiriladi',
@@ -209,6 +227,8 @@ async function main(): Promise<void> {
   const server = await listen(env.PORT);
 
   await assertDbReady();
+  // Avtomatik yangilangan Instagram token (bo'lsa) — birinchi API chaqiruvidan oldin
+  await initIgToken();
   await ensureTmpDir();
   // Jarayon avval job o'rtasida qulagan bo'lsa, tmp'da o'lik fayllar qoladi
   await cleanupTmpDir();
@@ -248,6 +268,8 @@ async function main(): Promise<void> {
   startWorkers();
   startRetention();
   startKeepAlive();
+  startIgTokenRefresh();
+  startMonitoring();
   // Instagram cookies holati logda darhol ko'rinsin (bor/yo'q/yaroqsiz)
   void instagramCookieArgs().catch((e: unknown) =>
     logger.warn({ err: errMessage(e) }, 'Instagram cookies faylini tayyorlab bo\'lmadi'),

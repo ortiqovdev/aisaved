@@ -357,6 +357,7 @@ supabase/migrations/0004_status_message.sql
 supabase/migrations/0005_speed.sql
 supabase/migrations/0006_song_cache.sql
 supabase/migrations/0007_ig_link_tokens.sql
+supabase/migrations/0008_app_kv.sql
 ```
 
 ---

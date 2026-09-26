@@ -46,6 +46,7 @@ import {
   type CachedMedia,
 } from '../db/media-cache.repo.ts';
 import { forgetStatusCard, statusCardOf } from '../bot/status-card.ts';
+import { alertAdminLater } from '../services/alerts.ts';
 
 /**
  * Bitta jobni to'liq bajaradi:
@@ -583,6 +584,10 @@ async function identifyWithFallback(
    * rostini aytamiz, logda esa xato.
    */
   log.error({ err: errMessage(lastError) }, 'Musiqa aniqlash xizmatlari ishlamadi');
+  alertAdminLater('song-service', '🟡 Qo\'shiq aniqlash ishlamayapti', [
+    errMessage(lastError).slice(0, 200),
+    'Shazam bu serverni bloklagan bo\'lishi mumkin. Zaxira: AUDD_ENABLED=true va AUDD_API_TOKEN.',
+  ]);
   if (lastError instanceof PermanentError) throw lastError;
   throw new PermanentError(errMessage(lastError), msg('songServiceDown'));
 }

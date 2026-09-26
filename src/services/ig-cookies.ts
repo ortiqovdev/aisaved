@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
+import { alertAdminLater } from './alerts.ts';
 
 /**
  * Instagram cookies — yt-dlp uchun `--cookies` argumenti.
@@ -46,12 +47,18 @@ function load(): string | null {
   // yt-dlp faqat Netscape formatini o'qiydi: sarlavha + tab bilan ajratilgan qatorlar
   if (!/^# (Netscape )?HTTP Cookie File/m.test(text)) {
     logger.error({ source: src.source }, 'Instagram cookies Netscape formatida emas ("# Netscape HTTP Cookie File" sarlavhasi yo\'q) — e\'tiborsiz qoldirildi');
+    alertAdminLater('cookies-invalid', '🔴 Instagram cookies fayli noto\'g\'ri', [
+      'Netscape formatida emas. Kengaytmada Export Format → Netscape ni tanlang (RENDER.md, 6b).',
+    ]);
     return null;
   }
   const igLines = text.split('\n').filter((l) => /^\S*instagram\.com\t/.test(l.replace(/^#HttpOnly_/, '')));
   const loggedIn = igLines.some((l) => l.split('\t')[5] === 'sessionid');
   if (!loggedIn) {
     logger.error({ source: src.source, igCookies: igLines.length }, 'Instagram cookies\'da "sessionid" yo\'q — akkauntga kirilmagan holda eksport qilingan');
+    alertAdminLater('cookies-invalid', '🔴 Instagram cookies fayli noto\'g\'ri', [
+      '"sessionid" yo\'q — Instagram\'ga kirmasdan eksport qilingan. Bot akkaunti bilan kirib, qayta eksport qiling.',
+    ]);
     return null;
   }
   logger.info({ source: src.source, igCookies: igLines.length }, 'Instagram cookies yuklandi (akkauntga kirilgan)');

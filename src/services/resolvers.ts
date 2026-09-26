@@ -8,6 +8,7 @@ import { msg } from '../i18n/index.ts';
 import { isResolverConfigured, resolveInstagramMedia, type ResolvedItem } from './ig-resolver.ts';
 import { ensureTmpDir, runCommand, safeUnlink, type DownloadedFile } from './media.ts';
 import { hasInstagramCookies, instagramCookieArgs } from './ig-cookies.ts';
+import { alertAdminLater } from './alerts.ts';
 import type { Platform } from './links.ts';
 
 /**
@@ -323,6 +324,17 @@ function ytDlpFailure(label: string, out: string): Error {
       hasInstagramCookies()
         ? 'Instagram cookies bilan ham blokladi — cookies eskirgan yoki akkaunt cheklangan: yangi cookies eksport qiling'
         : 'Instagram bu serverdan login\'siz so\'rovlarni blokladi (rate-limit) — IG cookies qo\'shing (RENDER.md)',
+    );
+    alertAdminLater(
+      'ig-ratelimit',
+      hasInstagramCookies() ? '🔴 Instagram cookies ishlamayapti' : '🔴 Instagram cookies yo\'q',
+      hasInstagramCookies()
+        ? [
+            'Instagram cookies bilan ham blokladi — cookies eskirgan yoki bot akkaunti cheklangan.',
+            'Yangi cookies eksport qilib, Render → Environment → Secret Files → instagram_cookies.txt ni yangilang (RENDER.md, 6b).',
+            'Bot akkauntini telefonda oching: "Bu men edim" / tasdiqlash so\'ralgan bo\'lishi mumkin.',
+          ]
+        : ['Reels yuklanmayapti. RENDER.md, 6b bo\'limi bo\'yicha cookies qo\'shing.'],
     );
     return new PermanentError(`${label}: Instagram rate-limit (login talab qilinadi)`, msg('errResolverCantFetch'));
   }

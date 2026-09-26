@@ -31,6 +31,19 @@ const envSchema = z.object({
     }, 'BOT_TIMEZONE yaroqsiz (masalan: Asia/Tashkent)'),
 
   // Telegram
+  /**
+   * Monitoring ogohlantirishlari shu Telegram ID'larga yuboriladi (vergul bilan).
+   * Bo'sh bo'lsa — ogohlantirishlar faqat logga yoziladi.
+   */
+  ADMIN_TELEGRAM_IDS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0),
+    ),
   // Kalitlar hosting paneliga nusxalanganda oxirida bo'sh joy / yangi qator
   // qolib ketishi oson — ko'rinmaydi, lekin solishtirish va sarlavhalarni buzadi
   TELEGRAM_BOT_TOKEN: z.string().trim().min(20, 'TELEGRAM_BOT_TOKEN yaroqsiz'),

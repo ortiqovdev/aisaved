@@ -24,6 +24,9 @@ services:
         value: '10'
       - key: BOT_TIMEZONE
         value: Asia/Tashkent
+      # Monitoring ogohlantirishlari shu Telegram ID'ga (@akmal_ortiqov); bir nechta — vergul bilan
+      - key: ADMIN_TELEGRAM_IDS
+        value: '1685820218'
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: IG_ACCOUNT_USERNAME

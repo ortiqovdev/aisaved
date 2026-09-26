@@ -125,6 +125,34 @@ bot reels'ni alohida Instagram akkaunt nomidan oladi.
 Instagram yangi akkauntga "Germaniyadan kirish urinishi" haqida xabar
 yuborishi mumkin — telefonda o'sha akkauntni ochib, **"Bu men edim"** ni bosing.
 
+## 6c. Monitoring va token
+
+Bot muammolar haqida `ADMIN_TELEGRAM_IDS` dagi Telegram akkauntga o'zi xabar
+beradi (`render.yaml` da o'rnatilgan; Render → Environment'da borligini tekshiring):
+
+| Xabar | Qachon |
+|---|---|
+| 🟢 Bot ishga tushdi | Har deploy / qayta ishga tushishda (versiya, cookies holati) |
+| 🔴 Instagram cookies ishlamayapti / yo'q | Instagram bloklasa — cookies'ni yangilash vaqti |
+| 🔴 Instagram token yaroqsiz / ⚠️ yangilanmadi | Token muddati — yangisini generatsiya qilish kerak |
+| 🔴 Xatolar ko'paydi | 30 daqiqada yarmidan ko'p so'rov xato |
+| 🟡 Navbat tiqilib qoldi | So'rovlar 10+ daqiqa kutyapti |
+| 🟡 Qo'shiq aniqlash ishlamayapti | Shazam bloklagan |
+| 🔴 Telegram xabarlarni qabul qilish to'xtab qolyapti | Masalan bot boshqa joyda ham ishlayapti (409) |
+| 📈 N foydalanuvchi | Har 500 foydalanuvchida — limit va xarajatlarni qayta ko'rish vaqti |
+
+Bir xil xabar soatiga ko'pi bilan bir marta keladi.
+
+**Instagram token** (~60 kun amal qiladi) bot tomonidan haftada bir avtomatik
+yangilanadi va Supabase'da saqlanadi — buning uchun
+[`0008_app_kv.sql`](supabase/migrations/0008_app_kv.sql) ni SQL Editor'da bir
+marta ishga tushiring. Busiz yangilangan token faqat xotirada turadi.
+
+**Bot butunlay o'chsa** (server tushsa), u o'zi xabar bera olmaydi — buning
+uchun tashqi kuzatuvchi: https://uptimerobot.com (bepul) → *New monitor* →
+HTTP(s) → `https://aisaved-bot.onrender.com/health`, har 5 daqiqa, ogohlantirish
+— email yoki Telegram.
+
 ## 7. Tekshirish
 
 - [ ] `https://aisaved-bot.onrender.com/health` → `"ok":true`

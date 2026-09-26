@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { PermanentError, TransientError, fetchWithTimeout, errMessage, sleep } from '../lib/errors.ts';
+import { igAccessToken, reportIfTokenError } from './ig-token.ts';
 
 /**
  * Meta webhook imzosini tekshiradi (X-Hub-Signature-256).
@@ -62,7 +63,7 @@ export async function sendInstagramText(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${env.IG_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${igAccessToken()}`,
       },
       body: JSON.stringify({
         recipient: { id: igScopedId },
@@ -85,6 +86,7 @@ export async function sendInstagramText(
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
+    reportIfTokenError(res.status, body);
     // 429 / 5xx — vaqtinchalik, qolganlari doimiy (token, ruxsat, 24-soat oynasi)
     if (res.status === 429 || res.status >= 500) {
       throw new TransientError(`Instagram send ${res.status}: ${body.slice(0, 400)}`);
@@ -163,11 +165,12 @@ export async function getInstagramProfile(igScopedId: string): Promise<IgProfile
   try {
     const res = await fetchWithTimeout(
       `${env.IG_GRAPH_BASE_URL}/${encodeURIComponent(igScopedId)}?fields=username,name,is_user_follow_business`,
-      { headers: { Authorization: `Bearer ${env.IG_ACCESS_TOKEN}` } },
+      { headers: { Authorization: `Bearer ${igAccessToken()}` } },
       10_000,
     );
     if (!res.ok) {
       const body = await res.text().catch(() => '');
+      reportIfTokenError(res.status, body);
       logger.warn({ igScopedId, status: res.status, body: body.slice(0, 300) }, 'Instagram profilini olib bo\'lmadi');
       return { username: null, name: null, followsUs: null };
     }
@@ -195,13 +198,14 @@ async function postMessagesApi(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${env.IG_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${igAccessToken()}`,
       },
       body: JSON.stringify(payload),
     },
     10_000,
   );
   const body = res.ok ? '' : await res.text().catch(() => '');
+  if (!res.ok) reportIfTokenError(res.status, body);
   return { ok: res.ok, status: res.status, body };
 }
 
