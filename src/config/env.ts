@@ -31,7 +31,9 @@ const envSchema = z.object({
     }, 'BOT_TIMEZONE yaroqsiz (masalan: Asia/Tashkent)'),
 
   // Telegram
-  TELEGRAM_BOT_TOKEN: z.string().min(20, 'TELEGRAM_BOT_TOKEN yaroqsiz'),
+  // Kalitlar hosting paneliga nusxalanganda oxirida bo'sh joy / yangi qator
+  // qolib ketishi oson — ko'rinmaydi, lekin solishtirish va sarlavhalarni buzadi
+  TELEGRAM_BOT_TOKEN: z.string().trim().min(20, 'TELEGRAM_BOT_TOKEN yaroqsiz'),
 
   /**
    * Mock rejim. `MOCK_MODE` — umumiy kalit; `MOCK_INSTAGRAM` va `MOCK_AUDD`
@@ -48,10 +50,10 @@ const envSchema = z.object({
     .default('https://www.w3schools.com/html/mov_bbb.mp4'),
 
   // Instagram / Meta
-  IG_ACCOUNT_USERNAME: z.string().min(1).transform((v) => v.replace(/^@/, '')),
-  IG_APP_SECRET: z.string().min(1),
-  IG_ACCESS_TOKEN: z.string().min(1),
-  IG_WEBHOOK_VERIFY_TOKEN: z.string().min(1),
+  IG_ACCOUNT_USERNAME: z.string().trim().min(1).transform((v) => v.replace(/^@/, '')),
+  IG_APP_SECRET: z.string().trim().min(1),
+  IG_ACCESS_TOKEN: z.string().trim().min(1),
+  IG_WEBHOOK_VERIFY_TOKEN: z.string().trim().min(1),
   IG_GRAPH_BASE_URL: z
     .string()
     .url()
@@ -118,8 +120,8 @@ const envSchema = z.object({
     .transform((v) => (v && v.trim() !== '' ? v.trim().replace(/\/+$/, '') : process.env['RENDER_EXTERNAL_URL'] || '')),
 
   // Supabase
-  SUPABASE_URL: z.string().url(),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(20),
+  SUPABASE_URL: z.string().trim().url(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().trim().min(20),
 
   // Worker
   WORKER_ENABLED: boolish(true),
