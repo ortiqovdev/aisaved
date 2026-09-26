@@ -427,6 +427,10 @@ async function handleMedia(
   } else if (outcome.status === 'limit') {
     const text = t(lang, 'igPendingLimit', { n: outcome.pending });
     await Promise.all([failInInstagram(igScopedId, event, text), trySendText(user.telegram_id, text)]);
+  } else if (outcome.status === 'not-subscribed') {
+    // Obuna tugmalari Telegram'ga ketdi — Instagram'da ❌ (qo'yilmasa qisqa matn)
+    await failInInstagram(igScopedId, event, t(lang, 'igSubRequired'));
   }
-  // queued — natija va ✅ worker'dan; duplicate — Meta webhook'ni qayta yubordi, javob takrorlanmaydi
+  // queued — natija va ✅ worker'dan; duplicate — Meta webhook'ni qayta yubordi,
+  // javob takrorlanmaydi; banned — jimlik
 }

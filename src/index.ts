@@ -20,6 +20,7 @@ import { instagramCookieArgs } from './services/ig-cookies.ts';
 import { alertAdminLater } from './services/alerts.ts';
 import { initIgToken, startIgTokenRefresh } from './services/ig-token.ts';
 import { startMonitoring } from './services/monitor.ts';
+import { probeAdminDb } from './db/admin.repo.ts';
 
 /** docs/ — loyiha ildizida; src/index.ts (dev) va dist/index.js (build) dan bir xil masofa. */
 const DOCS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -46,12 +47,17 @@ app.use(
 // Routes
 // ---------------------------------------------------------------------------
 
+/**
+ * Ochiq sog'liq tekshiruvi (Render, keep-alive, UptimeRobot) — ichki holat
+ * (navbat, worker) OSHKOR QILINMAYDI: u faqat admin panelda (/qimmat →
+ * ⚙️ Tizim holati). Baza ishlamasa 503 — tashqi kuzatuvchi buni sezadi.
+ */
 app.get('/health', async (_req, res) => {
   try {
-    const queue = await requestsRepo.queueStats();
-    res.json({ ok: true, uptime: process.uptime(), worker: workerStatus(), queue });
-  } catch (e) {
-    res.status(503).json({ ok: false, error: errMessage(e) });
+    await requestsRepo.queueStats();
+    res.json({ ok: workerStatus().running });
+  } catch {
+    res.status(503).json({ ok: false });
   }
 });
 
@@ -227,6 +233,8 @@ async function main(): Promise<void> {
   const server = await listen(env.PORT);
 
   await assertDbReady();
+  // Admin panel / majburiy a'zolik jadvallari (0009) bormi
+  await probeAdminDb();
   // Avtomatik yangilangan Instagram token (bo'lsa) — birinchi API chaqiruvidan oldin
   await initIgToken();
   await ensureTmpDir();

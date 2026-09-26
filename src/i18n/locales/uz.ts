@@ -204,6 +204,11 @@ instagram.com/{account} ni oching, "Obuna bo'lish" ni bosing, keyin pastdagi "�
 
 Pastdagi tugmani bosing — Telegram ochiladi, u yerda START ni bosing. Shundan keyin shu yerga yuborgan reels'laringiz videosi Telegram'ga keladi.`,
   igConnectButton: `📲 Telegram'da ulash`,
+  subRequired: `📢 Botdan foydalanish uchun quyidagi kanal(lar)ga obuna bo'ling, so'ng <b>✅ Tekshirish</b> tugmasini bosing.`,
+  subCheckButton: `✅ Tekshirish`,
+  subNotYet: `Hali barcha kanallarga obuna bo'lmadingiz.`,
+  subThanks: `✅ Rahmat! Endi botdan foydalanishingiz mumkin.`,
+  igSubRequired: `📢 Avval Telegram botdagi kanal(lar)ga obuna bo'ling — tugmalarni u yerga yubordim. Keyin reels'ni qayta yuboring.`,
   igLinkSuccessTg: `🔗 Bot bilan aloqa mavjud! Telegram: {tg}
 
 Endi reels va postlarni shu yerga yuborishingiz mumkin — videoni va qo'shiq nomini Telegram'ga yuboraman.

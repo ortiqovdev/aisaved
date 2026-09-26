@@ -75,6 +75,8 @@ import {
 } from './messages.ts';
 import { getInstagramProfile } from '../services/instagram.ts';
 import { completeTelegramConnect, connectTokenFromStart } from '../services/ig-connect.ts';
+import { accessComposer } from './access.ts';
+import { adminComposer } from './admin.ts';
 
 /** Har bir update'da foydalanuvchi tili va tarjima funksiyasi tayyor turadi. */
 export type BotContext = Context & {
@@ -98,6 +100,18 @@ bot.use(async (ctx, next) => {
   ctx.t = (key, vars) => t(ctx.lang, key, vars);
   await next();
 });
+
+// Ban, oxirgi faollik, majburiy a'zolik — barcha funksiyalardan oldin.
+// /qimmat admin panel — admin kiritishini (tarqatiladigan xabar va h.k.)
+// oddiy havola/video handlerlari ushlab qolmasligi uchun ulardan OLDIN.
+//
+// Kechiktirib (birinchi update'da) olinadi: access/admin modullari bu faylni
+// aylanma import qiladi — ulardan biri birinchi yuklansa, import paytida
+// composer hali tayyor bo'lmaydi ("before initialization" xatosi).
+let accessMw: ReturnType<typeof accessComposer.middleware> | null = null;
+let adminMw: ReturnType<typeof adminComposer.middleware> | null = null;
+bot.use((ctx, next) => (accessMw ??= accessComposer.middleware())(ctx, next));
+bot.use((ctx, next) => (adminMw ??= adminComposer.middleware())(ctx, next));
 
 /** Instagram akkaunt nomi — HTML'da xavfsiz ko'rinishda. */
 const igAccount = (): string => escapeHtml(env.IG_ACCOUNT_USERNAME);

@@ -204,6 +204,11 @@ instagram.com/{account} adresini aç, "Takip et"e dokun, sonra aşağıdaki "✅
 
 Aşağıdaki düğmeye dokun — Telegram açılacak, orada START'a bas. Bundan sonra buraya gönderdiğin Reels videoları Telegram'a gelir.`,
   igConnectButton: `📲 Telegram'ı bağla`,
+  subRequired: `📢 Botu kullanmak için aşağıdaki kanal(lar)a abone ol, sonra <b>✅ Kontrol et</b> düğmesine bas.`,
+  subCheckButton: `✅ Kontrol et`,
+  subNotYet: `Henüz tüm kanallara abone olmadın.`,
+  subThanks: `✅ Teşekkürler! Artık botu kullanabilirsin.`,
+  igSubRequired: `📢 Önce Telegram botundaki kanal(lar)a abone ol — düğmeleri oraya gönderdim. Sonra Reels'i tekrar gönder.`,
   igLinkSuccessTg: `🔗 Bot ile bağlantı kuruldu! Telegram: {tg}
 
 Artık Reels ve gönderileri buraya gönderebilirsin — videoyu ve şarkı adını Telegram'a gönderirim.

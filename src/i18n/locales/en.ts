@@ -217,6 +217,11 @@ Follow @{account} (instagram.com/{account}) and press "✅ I followed" again.`,
 
 Tap the button below — Telegram will open, press START there. After that, videos from the Reels you send here will arrive in Telegram.`,
   igConnectButton: `📲 Connect Telegram`,
+  subRequired: `📢 To use the bot, please subscribe to the channel(s) below, then tap <b>✅ Check</b>.`,
+  subCheckButton: `✅ Check`,
+  subNotYet: `You haven't subscribed to all channels yet.`,
+  subThanks: `✅ Thank you! You can use the bot now.`,
+  igSubRequired: `📢 First subscribe to our channel(s) in the Telegram bot — I've sent the buttons there. Then send the Reel again.`,
   igLinkSuccessTg: `🔗 Connected to the bot! Telegram: {tg}
 
 You can now send Reels and posts here — I'll deliver the video and the song name to Telegram.

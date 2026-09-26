@@ -14,6 +14,9 @@ import { trySendText } from '../bot/notify.ts';
 import { rememberStatusCard, sendStatusCard } from '../bot/status-card.ts';
 import { escapeHtml, formatDate, igAccountLabel } from '../bot/messages.ts';
 import { wakeWorkers } from '../workers/wake.ts';
+import { bot } from '../bot/index.ts';
+import { missingChannels, sendSubscribePrompt } from '../bot/access.ts';
+import { isAdmin, isBanned, touchActive } from '../db/admin.repo.ts';
 import { t, type Lang } from '../i18n/index.ts';
 
 /**
@@ -125,6 +128,8 @@ export async function completeTelegramConnect(from: TelegramFrom, lang: Lang, to
       } else if (outcome.status === 'limit') {
         await trySendText(from.id, t(lang, 'igPendingLimit', { n: outcome.pending }));
         break;
+      } else if (outcome.status === 'not-subscribed' || outcome.status === 'banned') {
+        break; // obuna tugmalari yuborildi / ban — qolganlari ham xuddi shunday bo'ladi
       }
     } catch (e) {
       logger.error({ err: errMessage(e), igScopedId }, 'Kutib turgan reels navbatga qo\'yilmadi');
@@ -137,7 +142,11 @@ export type EnqueueOutcome =
   | { status: 'queued'; requestId: number }
   | { status: 'duplicate' }
   | { status: 'limit'; pending: number }
-  | { status: 'not-downloadable' };
+  | { status: 'not-downloadable' }
+  /** Majburiy kanallarga obuna bo'lmagan — Telegram'ga obuna tugmalari yuborildi. */
+  | { status: 'not-subscribed' }
+  /** Admin ban qilgan — hech narsa qilinmaydi. */
+  | { status: 'banned' };
 
 /**
  * Bog'langan foydalanuvchining Instagram media'sini navbatga qo'yadi va
@@ -151,6 +160,17 @@ export async function enqueueInstagramMedia(
   media: PendingMedia,
   lang: Lang,
 ): Promise<EnqueueOutcome> {
+  // Telegram'dagi qoidalar Instagram orqali kelganda ham amal qilsin
+  if (await isBanned(user.telegram_id)) return { status: 'banned' };
+  if (!(await isAdmin(user.telegram_id))) {
+    const missing = await missingChannels(bot.api, user.telegram_id);
+    if (missing.length > 0) {
+      await sendSubscribePrompt(bot.api, user.telegram_id, lang, missing);
+      return { status: 'not-subscribed' };
+    }
+  }
+  touchActive(user.telegram_id);
+
   /**
    * Meta ba'zi reels uchun video fayl o'rniga reels SAHIFASINING havolasini
    * yuboradi (`instagram.com/reel/XXX/`) — to'g'ridan-to'g'ri yuklab bo'lmaydi.

@@ -271,6 +271,23 @@ Bog'lanish holatini ko'rish: **/status** · bekor qilish: **/unlink**
 
 ---
 
+## Admin panel — `/qimmat`
+
+Faqat adminlar uchun (boshqalarga bot javob bermaydi; buyruqlar menyusida ko'rinmaydi).
+Kerak: [`0009_admin.sql`](supabase/migrations/0009_admin.sql) migratsiyasi.
+
+| Bo'lim | Vazifasi |
+|---|---|
+| 📊 Statistika | Foydalanuvchilar: jami, yangi va faol — kunlik / haftalik / oylik / yillik; so'rovlar |
+| 📣 Xabar yuborish | Istalgan xabar (matn, rasm, video, GIF, ovoz, audio, fayl, stiker — izoh va tugmalari bilan) barcha foydalanuvchilarga; oldindan ko'rish, tasdiq, jarayon, to'xtatish, hisobot |
+| 📢 Majburiy kanallar | Qo'shish (@username, forward yoki ID) / o'chirish. Bot kanalda admin bo'lishi shart |
+| 👮 Adminlar | Yordamchi admin: Telegram ID (majburiy), telefon va @username (ixtiyoriy). Faqat asosiy admin boshqaradi |
+| 🔎 Foydalanuvchi | ID yoki @username bo'yicha ma'lumot; ⛔ ban / ✅ unban |
+| ⚙️ Tizim holati | Uptime, versiya, xotira, worker, navbat, Instagram cookies va token holati |
+
+Asosiy admin — `ADMIN_TELEGRAM_IDS` (env); monitoring ogohlantirishlari faqat unga yuboriladi.
+`/health` ichki holatni oshkor qilmaydi — faqat `{"ok":true}`.
+
 ## Buyruqlar (bot)
 
 Buyruqdan tashqari: botga **video, GIF, ovozli xabar yoki audio** yuborsangiz —
@@ -358,6 +375,7 @@ supabase/migrations/0005_speed.sql
 supabase/migrations/0006_song_cache.sql
 supabase/migrations/0007_ig_link_tokens.sql
 supabase/migrations/0008_app_kv.sql
+supabase/migrations/0009_admin.sql
 ```
 
 ---
