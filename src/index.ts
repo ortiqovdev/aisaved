@@ -17,6 +17,7 @@ import { startWorkers, stopWorkers, workerStatus } from './workers/index.ts';
 import { cleanupTmpDir, ensureTmpDir, startTmpCleanup, stopTmpCleanup } from './services/media.ts';
 import { startRetention, stopRetention } from './db/retention.ts';
 import { instagramCookieArgs } from './services/ig-cookies.ts';
+import { logResolverStatus } from './services/ig-resolver.ts';
 import { alertAdminLater } from './services/alerts.ts';
 import { initIgToken, startIgTokenRefresh } from './services/ig-token.ts';
 import { startMonitoring } from './services/monitor.ts';
@@ -282,6 +283,7 @@ async function main(): Promise<void> {
   void instagramCookieArgs().catch((e: unknown) =>
     logger.warn({ err: errMessage(e) }, 'Instagram cookies faylini tayyorlab bo\'lmadi'),
   );
+  logResolverStatus();
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'To\'xtatilmoqda...');

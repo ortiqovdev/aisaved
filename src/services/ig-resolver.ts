@@ -49,6 +49,29 @@ export function isResolverConfigured(): boolean {
 }
 
 /**
+ * Resolver holati logda darhol ko'rinsin (ig-cookies.ts dagi kabi) — aks holda
+ * bo'sh/buzuq IG_RESOLVER_HEADERS faqat birinchi so'rovda, provayderning
+ * tushunarsiz "401 Invalid API key" xatosi sifatida chiqadi.
+ */
+export function logResolverStatus(): void {
+  if (!isResolverConfigured()) {
+    logger.info('Instagram resolver API sozlanmagan — yt-dlp/cookies\'ga tayanadi');
+    return;
+  }
+  const headerCount = Object.keys(extraHeaders()).length;
+  if (env.IG_RESOLVER_HEADERS.trim() !== '' && headerCount === 0) {
+    logger.error('IG_RESOLVER_HEADERS buzuq JSON — resolver kalitsiz so\'rov yuboradi (401 kutiladi)');
+  } else if (headerCount === 0) {
+    logger.warn(
+      'IG_RESOLVER_URL sozlangan, lekin IG_RESOLVER_HEADERS bo\'sh — ko\'p provayder ' +
+        '(masalan RapidAPI) kalitsiz so\'rovni 401 bilan rad etadi',
+    );
+  } else {
+    logger.info({ headers: Object.keys(extraHeaders()) }, 'Instagram resolver API sozlangan');
+  }
+}
+
+/**
  * Instagram havolasidan video olsa bo'ladimi: tashqi resolver yoki yt-dlp
  * (resolvers.ts). Inline rejim uchun esa faqat resolver yaraydi — yt-dlp
  * havola emas, fayl beradi.
