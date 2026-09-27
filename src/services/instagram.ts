@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
-import { PermanentError, TransientError, fetchWithTimeout, errMessage, sleep } from '../lib/errors.ts';
+import { PermanentError, TransientError, fetchWithTimeout, errMessage } from '../lib/errors.ts';
 import { igAccessToken, reportIfTokenError } from './ig-token.ts';
 
 /**
@@ -246,85 +246,25 @@ export const IG_REACTION = { wait: '⌛', ok: '✅', fail: '❌', linked: '🔗'
 export type IgReaction = (typeof IG_REACTION)[keyof typeof IG_REACTION];
 
 /**
- * Meta reaksiya so'rovini tez-tez vaqtinchalik xato bilan qaytaradi
- * (500, `code: 2`, "An unexpected error has occurred. Please retry your
- * request later"), keyinroq esa o'sha so'rov o'tadi. Shuning uchun qayta
- * uriniladi — Meta tavsiyasiga ko'ra oraliq soniyalar, keyin o'nlab soniyalar.
- */
-const REACTION_RETRY_DELAYS_MS = [3_000, 15_000, 45_000];
-
-/** Har bir xabar uchun eng oxirgi so'ralgan reaksiya — eskisining qayta urinishi to'xtaydi. */
-const latestReaction = new Map<string, IgReaction>();
-/** Har bir xabar uchun ayni paytda ketayotgan so'rov — reaksiyalar tartibi aralashmasin. */
-const inflightReaction = new Map<string, Promise<unknown>>();
-
-const isTransientStatus = (status: number): boolean => status === 429 || status >= 500;
-
-/**
- * Reaksiya qo'yadi; vaqtinchalik xatoda qayta urinadi. Xato asosiy oqimni
- * to'xtatmaydi.
+ * Meta "react" so'rovini shu app/akkaunt uchun doim "code 2, is_transient"
+ * xatosi bilan rad etadi — Meta'ning o'z tavsiyasiga ko'ra qayta urinish
+ * (3s/15s/45s) ham yordam bermadi: loglardagi 75/75 urinish (⌛/✅/❌/🔗,
+ * hammasi baravar) muvaffaqiyatsiz. Shuning uchun o'chirilgan — 63 soniyalik
+ * kutish va log shovqinidan boshqa foyda bermasdi.
  *
- * @returns true — reaksiya qo'yildi YOKI uning o'rnini yangisi egalladi
- *          (ya'ni foydalanuvchi baribir holatni ko'radi); false — qo'yib
- *          bo'lmadi, chaqiruvchi zaxira sifatida matn yuborishi mumkin
+ * @returns doim `false` — chaqiruvchilar (masalan `failInInstagram`) matnli
+ *          zaxiraga o'tadi, xuddi hozirgi (har doim rad etiladigan) holatdagidek.
  */
 export async function trySendInstagramReaction(
   igScopedId: string,
-  messageId: string,
+  _messageId: string,
   reaction: IgReaction,
 ): Promise<boolean> {
   if (env.MOCK_INSTAGRAM) {
     logger.info({ igScopedId, reaction }, '💬 [MOCK] Instagram reaksiya (haqiqatda qo\'yilmadi)');
     return true;
   }
-
-  latestReaction.set(messageId, reaction);
-  const superseded = (): boolean => latestReaction.get(messageId) !== reaction;
-
-  try {
-    for (let attempt = 0; ; attempt += 1) {
-      // Oldingi reaksiya so'rovi hali yo'lda bo'lsa — u Meta'ga BIZDAN KEYIN
-      // yetib, yangi reaksiyaning ustidan yozmasligi uchun kutamiz
-      await inflightReaction.get(messageId)?.catch(() => undefined);
-      if (superseded()) return true;
-
-      const request = postMessagesApi({
-        recipient: { id: igScopedId },
-        sender_action: 'react',
-        payload: { message_id: messageId, reaction },
-      });
-      inflightReaction.set(messageId, request);
-
-      let status = 0;
-      let body = '';
-      try {
-        const res = await request;
-        if (res.ok) {
-          logger.debug({ igScopedId, reaction, attempt }, 'Instagram reaksiya qo\'yildi');
-          return true;
-        }
-        ({ status, body } = res);
-      } catch (e) {
-        body = errMessage(e); // tarmoq xatosi — vaqtinchalik
-      } finally {
-        if (inflightReaction.get(messageId) === request) inflightReaction.delete(messageId);
-      }
-
-      const delay = REACTION_RETRY_DELAYS_MS[attempt];
-      const transient = status === 0 || isTransientStatus(status);
-      if (!transient || delay === undefined) {
-        logger.warn(
-          { igScopedId, reaction, status, attempts: attempt + 1, body: body.slice(0, 300) },
-          'Instagram reaksiya qabul qilinmadi',
-        );
-        return false;
-      }
-      logger.debug({ igScopedId, reaction, status, retryInMs: delay }, 'Instagram reaksiya: qayta urinamiz');
-      await sleep(delay);
-    }
-  } finally {
-    if (latestReaction.get(messageId) === reaction) latestReaction.delete(messageId);
-  }
+  return false;
 }
 
 /**

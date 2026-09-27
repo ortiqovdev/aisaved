@@ -20,9 +20,10 @@ services:
       # Bepul tarif: 512 MB RAM, 0.1 vCPU — parallel ffmpeg/yt-dlp kamroq
       - key: WORKER_CONCURRENCY
         value: '4'
-      # ffmpeg/yt-dlp bir vaqtda ko'pi bilan 2 ta — 512 MB RAM to'lib, jarayon o'ldirilmasin
+      # 0.1 vCPU'da 2ta ffmpeg/yt-dlp bir vaqtda ishlasa ikkalasi ham sekinlashadi
+      # (Shazam vaqt tugab xato berishigacha olib kelgan) — ketma-ket ishlash tezroq
       - key: MAX_PARALLEL_PROCESSES
-        value: '2'
+        value: '1'
       - key: MAX_PENDING_PER_USER
         value: '10'
       - key: BOT_TIMEZONE

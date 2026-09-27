@@ -521,7 +521,7 @@ export async function makeVideoNote(inputPath: string, knownDuration?: number): 
     '-map', '0:a:0?',
     '-vf', `crop='min(iw,ih)':'min(iw,ih)',scale=${size}:${size}:flags=lanczos,setsar=1,fps=30`,
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
+    '-preset', 'ultrafast',
     '-crf', '26',
     '-pix_fmt', 'yuv420p',
     '-profile:v', 'main',

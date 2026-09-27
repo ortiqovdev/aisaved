@@ -35,7 +35,7 @@ interface ShazamTrack {
   };
 }
 
-const TIMEOUT_MS = 15_000;
+const TIMEOUT_MS = 20_000;
 
 export async function identifyWithShazam(audioPath: string): Promise<SongInfo | null> {
   const pcmPath = path.join(
