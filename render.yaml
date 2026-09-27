@@ -40,6 +40,11 @@ services:
         sync: false
       - key: IG_WEBHOOK_VERIFY_TOKEN
         sync: false
+      # Reels'ni cookiesiz olib beruvchi tashqi API — RENDER.md, 6a
+      - key: IG_RESOLVER_URL
+        value: 'https://instagram-api39.p.rapidapi.com/instagram/'
+      - key: IG_RESOLVER_HEADERS
+        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY

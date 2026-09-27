@@ -84,11 +84,42 @@ Render panelidagi manzilingiz (masalan `https://aisaved-bot.onrender.com`):
 
 Bu manzil **o'zgarmaydi**.
 
-## 6b. Instagram cookies (majburiy)
+## 6a. Instagram resolver API (tavsiya etiladi — cookiesiz, doimiy)
 
 Instagram server IP'laridan **login'siz** so'rovlarni bloklaydi — logda
-`You have exceeded the rate-limit for accessing posts anonymously`. Yechim:
-bot reels'ni alohida Instagram akkaunt nomidan oladi.
+`You have exceeded the rate-limit for accessing posts anonymously`. Buning eng
+barqaror yechimi: reels havolasini alohida akkaunt (6b, cookies) o'rniga
+tashqi API orqali olish — akkaunt kerak emas, cookies eskirmaydi, ban xavfi yo'q.
+
+Bot bu yo'lni **birinchi** sinaydi ([resolvers.ts](src/services/resolvers.ts)) —
+sozlansa, cookies umuman shart emas (6b ixtiyoriy zaxira bo'lib qoladi).
+
+1. https://rapidapi.com → ro'yxatdan o'ting (bepul).
+2. https://rapidapi.com/diyorbekkanal/api/instagram-api39/pricing → **Basic**
+   (**$0.00/oy, kuniga 50 so'rov** — sinov uchun yetarli) → **Start Free Plan**.
+   Ishonchli chiqsa, real foydalanuvchilar uchun **Pro** ga o'ting
+   ($10/oy — 50 000 so'rov/oy).
+3. Obuna bo'lgach ochiladigan **Endpoints** sahifasida **X-RapidAPI-Key**
+   qiymatini nusxalang.
+4. Render → **aisaved-bot** → **Environment** → `IG_RESOLVER_HEADERS` ga:
+   ```
+   {"x-rapidapi-key":"<nusxalangan kalit>","x-rapidapi-host":"instagram-api39.p.rapidapi.com"}
+   ```
+   `IG_RESOLVER_URL` `render.yaml` orqali avtomatik o'rnatiladi
+   (`https://instagram-api39.p.rapidapi.com/instagram/`).
+5. **Save changes** → servis qayta ishga tushadi.
+
+> Boshqa provayderga o'tish uchun kodga tegish shart emas — javobi
+> `{"result":[{"url":"...","type":"video/mp4","thumb":"..."}]}` shaklidagi
+> (yoki shunga o'xshash) har qanday RapidAPI Instagram-downloader ishlaydi;
+> shunchaki `IG_RESOLVER_URL` va `IG_RESOLVER_HEADERS` ni almashtiring.
+
+## 6b. Instagram cookies (ixtiyoriy zaxira)
+
+6a sozlansa, bu bo'lim **shart emas** — resolver bloklansa yoki javob bermasa,
+zanjir (ig-chain.ts) shunda ham cookies'ga, keyin login'siz yo'lga o'tadi.
+Qo'shimcha ishonchlilik uchun xohlasangiz sozlang: bot reels'ni alohida
+Instagram akkaunt nomidan oladi.
 
 > ⚠️ **Asosiy akkauntingizni ishlatmang.** Instagram avtomatlashtirilgan
 > so'rovlar uchun akkauntni vaqtincha cheklashi yoki bloklashi mumkin.
