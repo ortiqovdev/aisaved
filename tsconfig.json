@@ -11,6 +11,9 @@
     // qayta yozadi. Shu tufayli tsx/esbuild kerak emas.
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
+    // Node TS'ni faqat "strip" qiladi: enum, namespace, constructor(private x)
+    // dev'da (node src/...) yiqiladi — tsc buni build'dan oldin ushlasin
+    "erasableSyntaxOnly": true,
 
     "strict": true,
     "noUncheckedIndexedAccess": true,

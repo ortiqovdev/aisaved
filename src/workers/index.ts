@@ -2,13 +2,13 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
-import { PermanentError, TransientError, backoffMs, errMessage, sleep } from '../lib/errors.ts';
+import { BlockedError, PermanentError, TransientError, backoffMs, errMessage, sleep } from '../lib/errors.ts';
 import type { RequestRow } from '../db/types.ts';
 import * as requestsRepo from '../db/requests.repo.ts';
 import * as usersRepo from '../db/users.repo.ts';
 import { TELEGRAM_SOURCE } from '../lib/constants.ts';
 import { showFailure } from '../bot/notify.ts';
-import { forgetStatusCard, statusCardOf } from '../bot/status-card.ts';
+import { forgetStatusCard, setStatusCardText, statusCardOf } from '../bot/status-card.ts';
 import {
   IG_REACTION,
   instagramMessageIdOf,
@@ -121,6 +121,9 @@ async function handleJobFailure(job: RequestRow, e: unknown): Promise<void> {
     } catch (dbErr) {
       log.error({ err: errMessage(dbErr) }, 'Jobni navbatga qaytarib bo\'lmadi');
     }
+    // Blokda qayta urinish daqiqalab kutadi — foydalanuvchi "loading"ga qarab
+    // qolmasin: birinchi marta nima bo'layotganini aytamiz
+    if (e instanceof BlockedError && job.attempts === 1) await notifyRetrying(job);
     return;
   }
 
@@ -134,14 +137,30 @@ async function handleJobFailure(job: RequestRow, e: unknown): Promise<void> {
   await notifyUserOfFailure(job, e);
 }
 
+/** "Qabul qilindi" kartasi matnini "qayta urinyapman" ga almashtiradi (karta bo'lsa). */
+async function notifyRetrying(job: RequestRow): Promise<void> {
+  try {
+    const [cardId, user] = await Promise.all([statusCardOf(job.id), usersRepo.findByIdCached(job.user_id)]);
+    if (!cardId || !user) return;
+    await setStatusCardText(targetChatOf(job, user.telegram_id), cardId, t(langOfUser(user), 'sourceRetrying'));
+  } catch (err) {
+    logger.warn({ requestId: job.id, err: errMessage(err) }, 'Qayta urinish haqida xabar berib bo\'lmadi');
+  }
+}
+
 async function notifyUserOfFailure(job: RequestRow, e: unknown): Promise<void> {
   // Umumiy xabar manbaga qarab farq qiladi: foydalanuvchi videoni botga
   // o'zi tashlagan bo'lsa, "Instagram'da qaytadan yuboring" deyish chalkash.
   const fallback =
     job.media_type === TELEGRAM_SOURCE ? msg('failTelegramSource') : msg('failInstagramSource');
 
+  // Blok — post emas, manba aybdor: "post yopiqmi tekshiring" deyish noto'g'ri
   const userMessage =
-    e instanceof PermanentError && e.userMessage ? e.userMessage : fallback;
+    e instanceof PermanentError && e.userMessage
+      ? e.userMessage
+      : e instanceof BlockedError
+        ? msg('errSourceBusy')
+        : fallback;
 
   try {
     const user = await usersRepo.findByIdCached(job.user_id);

@@ -1,11 +1,11 @@
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
+import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { errMessage } from '../lib/errors.ts';
-import { safeUnlink } from './media.ts';
+import { runCommand, safeUnlink } from './media.ts';
 
 export interface MusicTrack {
   id: string; // YouTube Video ID
@@ -160,41 +160,16 @@ export async function downloadYouTubeAudio(
     `https://www.youtube.com/watch?v=${videoId}`,
   ];
 
-  return new Promise((resolve, reject) => {
-    const proc = spawn('yt-dlp', args);
-
-    const timer = setTimeout(() => {
-      proc.kill('SIGTERM');
-      cleanup().catch(() => {});
-      reject(new Error('Audio yuklab olish vaqti tugadi (timeout)'));
-    }, timeoutMs);
-
-    let stderr = '';
-    proc.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    proc.on('close', async (code) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        try {
-          const stat = await fsp.stat(filePath);
-          if (stat.size > 0) {
-            resolve({ filePath, cleanup });
-            return;
-          }
-        } catch {}
-      }
-      await cleanup();
-      reject(new Error(`yt-dlp xatosi (kod ${code}): ${stderr.slice(-300)}`));
-    });
-
-    proc.on('error', async (err) => {
-      clearTimeout(timer);
-      await cleanup();
-      reject(err);
-    });
-  });
+  // runCommand: umumiy jarayonlar limiti (RAM), timeout'da SIGKILL, YTDLP_PATH
+  try {
+    const { stderr } = await runCommand(env.YTDLP_PATH, args, timeoutMs, { allowFailure: true });
+    const stat = await fsp.stat(filePath).catch(() => null);
+    if (stat && stat.size > 0) return { filePath, cleanup };
+    throw new Error(`yt-dlp audio yuklamadi: ${stderr.slice(-300)}`);
+  } catch (e) {
+    await cleanup();
+    throw e;
+  }
 }
 
 /**

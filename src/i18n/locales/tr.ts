@@ -183,6 +183,8 @@ Artık Instagram'da <b>@{account}</b> hesabına Reels ve gönderiler gönder —
   errBadMediaLink: `⏳ Video bağlantısı çalışmadı — süresi dolmuş olabilir. Reels'i tekrar gönder.`,
   errResolverUnavailable: `⚙️ İndirme hizmetine bağlanılamadı. Biraz sonra tekrar dene.`,
   errResolverCantFetch: `😕 Bu bağlantıdan video alınamadı. Bağlantının doğru ve gönderinin herkese açık olduğunu kontrol et.`,
+  sourceRetrying: `⏳ Instagram şu an yavaşlatıyor — birkaç dakika içinde tekrar deneyip video hazır olur olmaz göndereceğim. Bir şey yapmana gerek yok.`,
+  errSourceBusy: `⏳ Instagram indirmeleri geçici olarak sınırladı. Birkaç dakika sonra tekrar dene — ya da videoyu kaydedip buraya gönder, şarkıyı hemen bulayım.`,
   errResolverNoVideo: `😕 Bu bağlantıda indirilecek bir şey bulunamadı. Gönderinin var olduğunu ve hesabın herkese açık olduğunu kontrol et.`,
   errCantGetFile: `❌ Bu dosya alınamadı. Lütfen tekrar gönder.`,
   errTooBigForTelegram: `📦 Video, Telegram'ın 50 MB sınırını aştığı için gönderilemedi.`,

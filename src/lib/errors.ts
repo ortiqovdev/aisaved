@@ -31,6 +31,19 @@ export class TransientError extends Error {
   }
 }
 
+/**
+ * Manba BIZNI blokladi (Instagram rate-limit, resolver kaliti/limiti) — post
+ * emas, yo'l aybdor. Zanjir keyingi yo'lni sinaydi (ig-chain.ts), hammasi
+ * bloklangan bo'lsa — job keyinroq qayta urinadi; foydalanuvchiga "post
+ * yopiq" emas, "vaqtincha band" deyiladi.
+ */
+export class BlockedError extends TransientError {
+  constructor(message: string, retryAfterMs?: number) {
+    super(message, retryAfterMs);
+    this.name = 'BlockedError';
+  }
+}
+
 export function toError(e: unknown): Error {
   if (e instanceof Error) return e;
   return new Error(typeof e === 'string' ? e : JSON.stringify(e));

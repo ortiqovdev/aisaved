@@ -183,6 +183,8 @@ Hozircha videoni o'zingiz saqlab shu yerga tashlang — musiqa nomini darhol top
   errBadMediaLink: `⏳ Video havolasi ishlamadi — ehtimol muddati o'tgan. Reels'ni qaytadan yuboring.`,
   errResolverUnavailable: `⚙️ Yuklash xizmatiga ulanib bo'lmadi. Birozdan so'ng qayta urinib ko'ring.`,
   errResolverCantFetch: `😕 Bu havoladan videoni ololmadim. Havola to'g'ri va post ochiq (public) ekanini tekshiring.`,
+  sourceRetrying: `⏳ Instagram hozir sekinlashtiryapti — bir necha daqiqada qayta urinaman va video tayyor bo'lishi bilan yuboraman. Hech narsa qilishingiz shart emas.`,
+  errSourceBusy: `⏳ Instagram yuklashni vaqtincha chekladi. Bir necha daqiqadan so'ng qayta urinib ko'ring — yoki videoni saqlab shu yerga tashlang, qo'shig'ini darhol topaman.`,
   errResolverNoVideo: `😕 Bu havolada yuklab olinadigan narsa topilmadi. Post mavjud va akkaunt ochiq (public) ekanini tekshiring.`,
   errCantGetFile: `❌ Bu faylni ola olmadim. Iltimos, qaytadan yuboring.`,
   errTooBigForTelegram: `📦 Video Telegram limitidan (50MB) katta bo'lgani uchun yuborib bo'lmadi.`,

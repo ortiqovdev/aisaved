@@ -155,6 +155,13 @@ const envSchema = z.object({
   // Worker
   WORKER_ENABLED: boolish(true),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(8),
+  /**
+   * Bir vaqtda ishlaydigan tashqi jarayonlar (ffmpeg, ffprobe, yt-dlp) soni.
+   * Worker'lar asosan tarmoqni kutadi, jarayonlar esa RAM va CPU yeydi: Render
+   * bepul tarifida (512 MB) 4 ta parallel yt-dlp+ffmpeg xotirani to'ldirardi.
+   * Qolganlari navbatda kutadi.
+   */
+  MAX_PARALLEL_PROCESSES: z.coerce.number().int().min(1).max(32).default(3),
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(500).default(3000),
   WORKER_STALE_LOCK_SECONDS: z.coerce.number().int().min(30).default(300),
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),

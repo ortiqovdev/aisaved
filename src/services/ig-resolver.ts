@@ -1,7 +1,8 @@
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
-import { PermanentError, TransientError, errMessage, fetchWithTimeout } from '../lib/errors.ts';
+import { BlockedError, PermanentError, TransientError, errMessage, fetchWithTimeout } from '../lib/errors.ts';
 import { msg } from '../i18n/index.ts';
+import { alertAdminLater } from './alerts.ts';
 
 /**
  * Instagram havolasidan video faylini topib beruvchi qatlam.
@@ -168,16 +169,20 @@ export async function resolveInstagramMedia(link: string): Promise<ResolvedMedia
     const text = await res.text().catch(() => '');
     const snippet = text.slice(0, 300);
 
-    // 429 / 5xx — provayder band yoki limitda: keyinroq qayta urinamiz
-    if (res.status === 429 || res.status >= 500) {
-      throw new TransientError(`Resolver ${res.status}: ${snippet}`);
+    // 401/403/429 — kalit noto'g'ri, obuna tugagan yoki limit: post emas, yo'l
+    // aybdor — zanjir (ig-chain.ts) keyingi yo'lga o'tadi va bu yo'lni sovitadi
+    if (res.status === 401 || res.status === 403 || res.status === 429) {
+      if (res.status !== 429) {
+        alertAdminLater('ig-resolver-key', '🔴 Instagram resolver (API) kaliti ishlamayapti', [
+          `HTTP ${res.status}: ${snippet.slice(0, 150)}`,
+          'IG_RESOLVER_HEADERS dagi kalitni yoki obunani tekshiring.',
+        ]);
+      }
+      throw new BlockedError(`Resolver ${res.status} (kalit/obuna/limit): ${snippet}`);
     }
-    // 401/403 — kalit noto'g'ri yoki obuna tugagan: retry foydasiz
-    if (res.status === 401 || res.status === 403) {
-      throw new PermanentError(
-        `Resolver ${res.status} (kalit/obuna): ${snippet}`,
-        msg('errResolverUnavailable'),
-      );
+    // 5xx — provayder vaqtincha ishlamayapti: keyinroq qayta urinamiz
+    if (res.status >= 500) {
+      throw new TransientError(`Resolver ${res.status}: ${snippet}`);
     }
     throw new PermanentError(
       `Resolver ${res.status}: ${snippet}`,

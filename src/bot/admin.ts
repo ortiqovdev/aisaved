@@ -27,6 +27,9 @@ import { getKv } from '../db/kv.repo.ts';
 import { escapeHtml, formatDate } from './messages.ts';
 import { getInstagramProfile } from '../services/instagram.ts';
 import { hasInstagramCookies } from '../services/ig-cookies.ts';
+import { isResolverConfigured } from '../services/ig-resolver.ts';
+import { instagramChain } from '../services/resolvers.ts';
+import { processStats } from '../services/media.ts';
 import { workerStatus } from '../workers/index.ts';
 
 /**
@@ -215,7 +218,18 @@ adminComposer.callbackQuery(`${P}:sys`, async (ctx) => {
   } catch (e) {
     lines.push(`📥 Navbat: ❌ ${escapeHtml(errMessage(e))}`);
   }
+  const p = processStats();
+  lines.push(`🧮 Jarayonlar (ffmpeg/yt-dlp): ${p.active}/${env.MAX_PARALLEL_PROCESSES} band, navbatda ${p.waiting}`);
   lines.push(`🍪 Instagram cookies: ${hasInstagramCookies() ? 'bor ✅' : 'YO\'Q ❌ — reels yuklanmaydi'}`);
+  lines.push(`🔌 Instagram API (resolver): ${isResolverConfigured() ? 'ulangan ✅' : 'yo\'q'}`);
+  const cooling = instagramChain.cooling();
+  lines.push(
+    cooling.length === 0
+      ? '🟢 Instagram yo\'llari: bloklanmagan'
+      : `🟠 Instagram bloklagan yo'llar: ${cooling
+          .map((c) => `${escapeHtml(c.name)} (${Math.ceil(c.msLeft / 60_000)} daq)`)
+          .join(', ')}`,
+  );
   const token = await getKv<{ refreshedAt: string; expiresAt: string | null }>('ig_token').catch(() => null);
   lines.push(
     token

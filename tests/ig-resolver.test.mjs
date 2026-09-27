@@ -33,6 +33,7 @@ const server = http.createServer((req, res) => {
 
   if (code === 'ERR500') { res.writeHead(500); res.end('provayder band'); return; }
   if (code === 'ERR403') { res.writeHead(403); res.end('kalit yaroqsiz'); return; }
+  if (code === 'ERR429') { res.writeHead(429); res.end('limit'); return; }
   if (code === 'ERRJSON') { res.writeHead(200, {'content-type':'application/json'}); res.end('{buzuq'); return; }
 
   const body = SHAPES[code];
@@ -113,7 +114,9 @@ console.log('\n=== 3) Xato holatlari ===');
 for (const [code, kind, wantType] of [
   ['E', 'javobda video yo\'q', 'PermanentError'],
   ['ERR500', 'provayder 5xx', 'TransientError'],
-  ['ERR403', 'kalit yaroqsiz', 'PermanentError'],
+  // Kalit/limit — post emas, yo'l aybdor: zanjir keyingi yo'lga o'tadi (ig-chain.ts)
+  ['ERR403', 'kalit yaroqsiz', 'BlockedError'],
+  ['ERR429', 'provayder limiti', 'BlockedError'],
   ['ERRJSON', 'buzuq JSON', 'TransientError'],
   ['ZZZ', 'provayder 404', 'PermanentError'],
 ]) {

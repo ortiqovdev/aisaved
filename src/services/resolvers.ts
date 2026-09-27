@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
-import { PermanentError, TransientError, errMessage, fetchWithTimeout } from '../lib/errors.ts';
+import { BlockedError, PermanentError, TransientError, errMessage, fetchWithTimeout } from '../lib/errors.ts';
+import { Chain, type Strategy } from './ig-chain.ts';
 import { msg } from '../i18n/index.ts';
 import { isResolverConfigured, resolveInstagramMedia, type ResolvedItem } from './ig-resolver.ts';
 import { ensureTmpDir, runCommand, safeUnlink, type DownloadedFile } from './media.ts';
@@ -50,9 +51,7 @@ export async function resolvePost(
 ): Promise<ResolvedPost> {
   switch (platform) {
     case 'instagram':
-      return isResolverConfigured()
-        ? { items: (await resolveInstagramMedia(url)).items }
-        : resolveInstagramWithYtDlp(url, jobId);
+      return resolveInstagram(url, jobId);
     case 'tiktok':
       return resolveTikTok(url);
     case 'pinterest':
@@ -221,12 +220,34 @@ const resolveYouTube = (link: string, jobId: number): Promise<ResolvedPost> =>
     maxSeconds: env.YOUTUBE_MAX_SECONDS,
   });
 
+/** Instagram yo'llari — bittasi bloklansa keyingisi, bloklangani sovitiladi. */
+export const instagramChain = new Chain('Instagram');
+
 /**
- * Instagram — IG_RESOLVER_URL sozlanmagan bo'lsa, yt-dlp orqali (bepul,
- * login'siz). Meta DM'da ulashilgan reels uchun video emas, faqat sahifa
- * havolasini beradi — shu yo'l bilan u baribir yuklanadi. Instagram
- * login'siz so'rovlarni cheklashi mumkin; unda "rate-limit / login required"
- * xatosi keladi va foydalanuvchiga videoni o'zi tashlash taklif qilinadi.
+ * Instagram reels/post: tartib bo'yicha
+ *   1) tashqi API (IG_RESOLVER_URL) — sozlangan bo'lsa, eng barqaror
+ *   2) yt-dlp + cookies — bot akkaunti nomidan (bepul)
+ *   3) yt-dlp login'siz — server IP'si hali bloklanmagan bo'lsa
+ * Meta DM'da ulashilgan reels uchun ham video emas, faqat sahifa havolasini
+ * beradi — shuning uchun DM yo'li ham shu zanjirdan o'tadi.
+ */
+async function resolveInstagram(link: string, jobId: number): Promise<ResolvedPost> {
+  const strategies: Array<Strategy<ResolvedPost>> = [];
+  if (isResolverConfigured()) {
+    strategies.push({ name: 'api', run: async () => ({ items: (await resolveInstagramMedia(link)).items }) });
+  }
+  if (env.YTDLP_PATH.trim() !== '') {
+    const cookieArgs = await instagramCookieArgs();
+    if (cookieArgs.length > 0) {
+      strategies.push({ name: 'yt-dlp+cookies', run: () => resolveInstagramWithYtDlp(link, jobId, cookieArgs) });
+    }
+    strategies.push({ name: 'yt-dlp', run: () => resolveInstagramWithYtDlp(link, jobId, []) });
+  }
+  return instagramChain.run(strategies);
+}
+
+/**
+ * Instagram — yt-dlp orqali (cookies bilan yoki login'siz).
  *
  * Tezkor yo'l: yt-dlp faylni YUKLAMAYDI — faqat to'g'ridan-to'g'ri mp4
  * havolasini oladi (~4 s), Telegram esa videoni shu havoladan o'zi tortadi.
@@ -235,8 +256,7 @@ const resolveYouTube = (link: string, jobId: number): Promise<ResolvedPost> =>
  * (YouTube'dan farqli). Telegram ololmasa — worker o'zi yuklab yuboradi.
  * Reels faqat alohida video+ovoz (DASH) ko'rinishida bo'lsa — yuklab birlashtiramiz.
  */
-export async function resolveInstagramWithYtDlp(link: string, jobId: number): Promise<ResolvedPost> {
-  const cookieArgs = await instagramCookieArgs();
+async function resolveInstagramWithYtDlp(link: string, jobId: number, cookieArgs: string[]): Promise<ResolvedPost> {
   const direct = await instagramDirectUrl(link, cookieArgs);
   if (direct) return { items: [{ url: direct.url, kind: 'video', thumb: direct.thumb }] };
   return downloadWithYtDlp(link, jobId, {
@@ -244,6 +264,7 @@ export async function resolveInstagramWithYtDlp(link: string, jobId: number): Pr
     prefix: 'ig',
     format: 'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',
     extraArgs: cookieArgs,
+    anonymous: cookieArgs.length === 0,
   });
 }
 
@@ -285,7 +306,7 @@ async function instagramDirectUrl(
   const out = `${stdout}\n${stderr}`;
   if (line || /requested format is not available/i.test(out)) return null;
   logger.warn({ link, out: out.slice(-400) }, 'yt-dlp havolani ochmadi');
-  throw ytDlpFailure('Instagram', out);
+  throw ytDlpFailure('Instagram', out, cookieArgs.length === 0);
 }
 
 /** yt-dlp'ni ishga tushiradi; dastur yo'q bo'lsa — foydalanuvchiga tushunarli xato. */
@@ -300,8 +321,13 @@ async function runYtDlp(args: string[], timeoutMs: number): Promise<{ stdout: st
   }
 }
 
-/** yt-dlp chiqishidan xato turini aniqlaydi: doimiy (qayta urinish foydasiz) yoki vaqtinchalik. */
-function ytDlpFailure(label: string, out: string): Error {
+/**
+ * yt-dlp chiqishidan xato turini aniqlaydi: doimiy (post aybdor), blok (yo'l
+ * aybdor — boshqa yo'l yoki keyinroq) yoki vaqtinchalik.
+ * @param anonymous login'siz so'rov — "login kerak" javobi bunda post yopiqligini
+ *   emas, server IP'sining bloklanganini bildiradi
+ */
+function ytDlpFailure(label: string, out: string, anonymous = false): Error {
   const maxMb = Math.floor(env.MAX_VIDEO_BYTES / (1024 * 1024));
   if (/does not pass filter/i.test(out)) {
     return new PermanentError(`${label}: video juda uzun`, msg('errVideoTooLong'));
@@ -315,28 +341,37 @@ function ytDlpFailure(label: string, out: string): Error {
   if (/no video formats found|there is no video/i.test(out)) {
     return new PermanentError(`${label}: postda video yo'q`, msg('errResolverNoVideo'));
   }
-  // Instagram server IP'sini blokladi (login'siz so'rovlar limiti). Daqiqalar
-  // ichida qayta urinish foyda bermaydi — foydalanuvchi "loading"da kutib
-  // qolmasin, darhol javob olsin. Doimiy yechim: cookies yoki IG_RESOLVER_URL.
-  if (/rate-limit|redirected to the login page/i.test(out)) {
-    logger.error(
-      { label, cookies: hasInstagramCookies() },
-      hasInstagramCookies()
-        ? 'Instagram cookies bilan ham blokladi — cookies eskirgan yoki akkaunt cheklangan: yangi cookies eksport qiling'
-        : 'Instagram bu serverdan login\'siz so\'rovlarni blokladi (rate-limit) — IG cookies qo\'shing (RENDER.md)',
-    );
-    alertAdminLater(
-      'ig-ratelimit',
-      hasInstagramCookies() ? '🔴 Instagram cookies ishlamayapti' : '🔴 Instagram cookies yo\'q',
-      hasInstagramCookies()
-        ? [
-            'Instagram cookies bilan ham blokladi — cookies eskirgan yoki bot akkaunti cheklangan.',
-            'Yangi cookies eksport qilib, Render → Environment → Secret Files → instagram_cookies.txt ni yangilang (RENDER.md, 6b).',
-            'Bot akkauntini telefonda oching: "Bu men edim" / tasdiqlash so\'ralgan bo\'lishi mumkin.',
-          ]
-        : ['Reels yuklanmayapti. RENDER.md, 6b bo\'limi bo\'yicha cookies qo\'shing.'],
-    );
-    return new PermanentError(`${label}: Instagram rate-limit (login talab qilinadi)`, msg('errResolverCantFetch'));
+  // YouTube: "Sign in to confirm you're not a bot" — server IP'si bloklangan
+  if (/confirm you.re not a bot/i.test(out)) {
+    return new BlockedError(`${label}: bot tekshiruvi (server IP bloklangan)`);
+  }
+  // Instagram server IP'sini (yoki cookies akkauntini) blokladi. Post emas, yo'l
+  // aybdor: zanjir keyingi yo'lni sinaydi (ig-chain.ts), hammasi bloklansa —
+  // job keyinroq qayta urinadi. Doimiy yechim: cookies yoki IG_RESOLVER_URL.
+  const loginWall = /login required|sign in|empty media response/i.test(out);
+  if (/rate-limit|redirected to the login page/i.test(out) || (anonymous && loginWall)) {
+    const cookiesBroken = !anonymous;
+    // Login'siz yo'l bloklangani — cookies bor bo'lsa kutilgan hol, ogohlantirish shart emas
+    if (cookiesBroken || !hasInstagramCookies()) {
+      logger.error(
+        { label, anonymous },
+        cookiesBroken
+          ? 'Instagram cookies bilan ham blokladi — cookies eskirgan yoki akkaunt cheklangan: yangi cookies eksport qiling'
+          : 'Instagram bu serverdan login\'siz so\'rovlarni blokladi (rate-limit) — IG cookies qo\'shing (RENDER.md)',
+      );
+      alertAdminLater(
+        'ig-ratelimit',
+        cookiesBroken ? '🔴 Instagram cookies ishlamayapti' : '🔴 Instagram cookies yo\'q',
+        cookiesBroken
+          ? [
+              'Instagram cookies bilan ham blokladi — cookies eskirgan yoki bot akkaunti cheklangan.',
+              'Yangi cookies eksport qilib, Render → Environment → Secret Files → instagram_cookies.txt ni yangilang (RENDER.md, 6b).',
+              'Bot akkauntini telefonda oching: "Bu men edim" / tasdiqlash so\'ralgan bo\'lishi mumkin.',
+            ]
+          : ['Reels yuklanmayapti. RENDER.md, 6b bo\'limi bo\'yicha cookies qo\'shing.'],
+      );
+    }
+    return new BlockedError(`${label}: Instagram ${anonymous ? 'login\'siz so\'rovlarni' : 'cookies akkauntini'} blokladi`);
   }
   // "empty media response" — Instagram: post o'chirilgan, yopiq yoki login talab qiladi
   if (/private|unavailable|removed|not available|sign in|login required|empty media response/i.test(out)) {
@@ -355,6 +390,8 @@ interface YtDlpOptions {
   maxSeconds?: number;
   /** Qo'shimcha yt-dlp argumentlari (masalan Instagram cookies). */
   extraArgs?: string[];
+  /** Login'siz so'rov (Instagram cookies'siz) — xato tasnifi uchun. */
+  anonymous?: boolean;
 }
 
 async function downloadWithYtDlp(link: string, jobId: number, opts: YtDlpOptions): Promise<ResolvedPost> {
@@ -392,7 +429,7 @@ async function downloadWithYtDlp(link: string, jobId: number, opts: YtDlpOptions
     await removeWithPrefix(base);
     const out = `${stdout}\n${stderr}`;
     logger.warn({ link, out: out.slice(-400) }, 'yt-dlp faylni yuklamadi');
-    throw ytDlpFailure(label, out);
+    throw ytDlpFailure(label, out, opts.anonymous);
   }
 
   const music = youtubeMusicOf(stdout);

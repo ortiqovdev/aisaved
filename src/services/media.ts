@@ -9,6 +9,7 @@ import { env } from '../config/env.ts';
 import { logger } from '../lib/logger.ts';
 import { PermanentError, TransientError, errMessage, fetchWithTimeout } from '../lib/errors.ts';
 import { msg } from '../i18n/index.ts';
+import { Semaphore } from '../lib/semaphore.ts';
 
 const isRemote = (input: string): boolean => /^https?:\/\//i.test(input);
 
@@ -552,11 +553,29 @@ export interface RunOptions {
   allowFailure?: boolean;
 }
 
+/** ffmpeg / yt-dlp — RAM va CPU yeydi: bir vaqtda ko'pi bilan MAX_PARALLEL_PROCESSES ta. */
+const processes = new Semaphore(env.MAX_PARALLEL_PROCESSES);
+
+export const processStats = (): { active: number; waiting: number } => processes.stats;
+
+/**
+ * Tashqi dasturni ishga tushiradi. Joy bo'lmasa navbatda kutadi — `timeoutMs`
+ * dastur ishga tushgan paytdan hisoblanadi.
+ */
 export function runCommand(
   cmd: string,
   args: string[],
   timeoutMs: number,
   options: RunOptions = {},
+): Promise<{ stdout: string; stderr: string }> {
+  return processes.run(() => spawnCommand(cmd, args, timeoutMs, options));
+}
+
+function spawnCommand(
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+  options: RunOptions,
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { windowsHide: true });

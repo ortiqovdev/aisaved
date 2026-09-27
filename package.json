@@ -22,6 +22,8 @@
     "test:round": "node tests/video-note.test.mjs",
     "test:links": "node tests/links.test.mjs",
     "test:shazam": "node tests/shazam.live.mjs",
+    "test:chain": "node tests/ig-chain.test.mjs",
+    "test": "tsc --noEmit && node tests/ig-chain.test.mjs && node tests/i18n.test.mjs && node tests/links.test.mjs && node tests/ig-resolver.test.mjs && node tests/video-note.test.mjs",
     "bot:profile": "node src/scripts/sync-bot-profile.ts"
   },
   "dependencies": {
